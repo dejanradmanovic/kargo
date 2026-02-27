@@ -29,7 +29,7 @@ A comprehensive guide to Kargo, a Cargo-inspired build tool for Kotlin written i
 Clone the repository and install the CLI:
 
 ```bash
-git clone https://github.com/VicertDev/kargo.git
+git clone https://github.com/dejanradmanovic/kargo.git
 cd kargo
 cargo install --path crates/kargo-cli
 ```
@@ -92,10 +92,10 @@ Use the `--template` (or `-t`) flag with `kargo new` or `kargo init`:
 | Template | Description |
 |----------|-------------|
 | **jvm** (default) | JVM-only application with `Main.kt` |
-| **kmp** | Kotlin Multiplatform with `commonMain`, `jvmMain`, `iosMain` |
-| **compose** | KMP + Compose Multiplatform UI |
-| **lib** | Library project (JVM target) |
-| **cli** | JVM-only CLI-style application |
+| **lib** | JVM library |
+| **kmp** | Kotlin Multiplatform (JVM + iOS) |
+| **cmp** | Compose Multiplatform (JVM + Android + iOS + Desktop) |
+| **android** | Android-only application |
 
 ### Examples
 
@@ -107,13 +107,16 @@ kargo new my-app
 kargo new my-kmp --template kmp
 
 # Compose Multiplatform
-kargo new my-compose-app --template compose
+kargo new my-compose-app --template cmp
 
 # Library
 kargo new my-lib --template lib
 
+# Android
+kargo new my-droid --template android
+
 # Initialize in current directory
-kargo init --template cli
+kargo init --template kmp
 ```
 
 ---
