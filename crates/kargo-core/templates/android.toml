@@ -1,0 +1,67 @@
+[template]
+name = "android"
+description = "Android-only Kotlin application"
+
+[manifest]
+content = """
+[package]
+name = "{{project_name}}"
+version = "0.1.0"
+kotlin = "{{kotlin_version}}"
+
+[targets.android]
+min-sdk = 24
+target-sdk = 35
+compile-sdk = 35
+
+[dependencies]
+
+[dev-dependencies]
+"""
+
+[[directories]]
+path = "src/main/kotlin"
+
+[[directories]]
+path = "src/main/res"
+
+[[directories]]
+path = "src/test/kotlin"
+
+[[files]]
+path = "src/main/AndroidManifest.xml"
+content = """
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.{{project_name}}">
+
+    <application
+        android:label="{{project_name}}"
+        android:supportsRtl="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"""
+
+[[files]]
+path = "src/main/kotlin/MainActivity.kt"
+content = """
+package com.example
+
+import android.os.Bundle
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        println("Hello from {{project_name}}!")
+    }
+}
+"""

@@ -1,0 +1,21 @@
+[package]
+name = "kargo-compiler"
+description = "Kotlin compiler orchestration: kotlinc invocation, Compose plugin, KSP/KAPT, CInterop, incremental builds, unit graph, job queue, build cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-toolchain.workspace = true
+kargo-util.workspace = true
+petgraph.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true
+tempfile.workspace = true

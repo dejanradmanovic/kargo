@@ -1,0 +1,44 @@
+[package]
+name = "my-kmp-compose"
+version = "1.0.0"
+kotlin = "2.3.0"
+description = "A Kotlin Multiplatform Compose app"
+
+[targets]
+jvm = { java-target = "21" }
+ios-arm64 = {}
+ios-simulator-arm64 = {}
+js = { module-kind = "es" }
+wasm-js = {}
+
+[compose]
+enabled = true
+
+[dependencies]
+kotlinx-coroutines = "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0"
+kotlinx-serialization = "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0"
+
+[target.jvm.dependencies]
+ktor-server = "io.ktor:ktor-server-core:2.3.0"
+
+[dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"
+
+[plugins]
+serialization = "org.jetbrains.kotlin.plugin.serialization"
+
+[hooks]
+pre-build = ["fmt --check", "lint"]
+post-test = ["coverage-report"]
+
+[lint]
+rules = ["naming", "style", "complexity"]
+severity = "warning"
+
+[format]
+style = "official"
+indent = 4
+max-line-length = 120
+
+[workspace]
+members = ["app", "shared"]

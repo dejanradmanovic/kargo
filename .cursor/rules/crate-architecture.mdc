@@ -1,0 +1,37 @@
+---
+description: Crate ownership and dependency rules for the Kargo workspace
+globs: ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml"]
+---
+
+# Crate Architecture
+
+## Dependency Direction (arrows mean "depends on")
+```
+kargo-cli -> kargo-ops -> kargo-core
+                       -> kargo-resolver -> kargo-maven -> kargo-core
+                       -> kargo-compiler -> kargo-toolchain
+                                        -> kargo-core
+                       -> kargo-lint -> kargo-core
+                       -> kargo-plugin -> kargo-core
+All crates -> kargo-util (shared utilities)
+```
+
+## Crate Responsibilities
+
+- **kargo-util**: Error types, FS helpers, process spawning, hashing, progress bars. No domain logic.
+- **kargo-core**: Data types only (Manifest, Package, Workspace, Target, SourceSet, Dependency, Flavor, Variant, Profile, Config, Lockfile, VersionCatalog, Properties). Parsing and serialization. No I/O beyond reading config files.
+- **kargo-maven**: Maven repository protocol. POM parsing, metadata.xml, artifact download, checksums, auth, publishing. Depends on kargo-core for types.
+- **kargo-resolver**: Dependency resolution algorithm. Depends on kargo-maven for fetching metadata and kargo-core for types.
+- **kargo-compiler**: Kotlin compiler invocation, build cache, incremental builds, unit graph, job queue. Depends on kargo-toolchain for compiler paths and kargo-core for types.
+- **kargo-toolchain**: Kotlin/JDK download, version management, SDK discovery. No domain logic beyond toolchain management.
+- **kargo-plugin**: Plugin system (Rhai scripting, subcommand discovery, hook dispatch). Depends on kargo-core for manifest types.
+- **kargo-lint**: Lint engine and formatter. Tree-sitter Kotlin parsing, rule execution. Depends on kargo-core for config types.
+- **kargo-ops**: High-level operations that wire together multiple crates. One function per CLI command. Depends on everything except kargo-cli.
+- **kargo-cli**: Binary entry point. Clap CLI parsing, delegates to kargo-ops. No business logic.
+
+## Rules
+- Never add a dependency from kargo-core to any other kargo-* crate (except kargo-util)
+- Never add a dependency from kargo-util to any other kargo-* crate
+- kargo-cli should only depend on kargo-ops, kargo-core, and kargo-util
+- If you need a new crate, discuss the boundary first
+- Keep kargo-core free of async code and network I/O

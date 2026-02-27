@@ -1,0 +1,23 @@
+[package]
+name = "kargo-maven"
+description = "Maven repository protocol: POM parsing, metadata.xml, artifact download, checksum verification, local cache, authentication, publishing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-util.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+md-5.workspace = true
+semver.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true
+tempfile.workspace = true

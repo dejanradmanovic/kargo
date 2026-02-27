@@ -1,0 +1,98 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kargo-cli",
+    "crates/kargo-ops",
+    "crates/kargo-core",
+    "crates/kargo-resolver",
+    "crates/kargo-maven",
+    "crates/kargo-compiler",
+    "crates/kargo-plugin",
+    "crates/kargo-lint",
+    "crates/kargo-toolchain",
+    "crates/kargo-util",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/VicertDev/kargo"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+
+# CLI
+clap = { version = "4", features = ["derive", "env", "string"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# XML parsing (POM files)
+quick-xml = { version = "0.37", features = ["serialize"] }
+
+# Error handling
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Hashing
+sha2 = "0.10"
+md-5 = "0.10"
+
+# Version parsing
+semver = { version = "1", features = ["serde"] }
+
+# Graph data structures
+petgraph = "0.6"
+
+# Terminal UI
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+
+# File watching
+notify = "7"
+
+# Glob patterns
+globset = "0.4"
+
+# Temp files
+tempfile = "3"
+
+# Plugin scripting
+rhai = "1"
+
+# Tree-sitter for Kotlin parsing
+tree-sitter = "0.24"
+
+# Internal crates
+kargo-core = { path = "crates/kargo-core" }
+kargo-util = { path = "crates/kargo-util" }
+kargo-ops = { path = "crates/kargo-ops" }
+kargo-resolver = { path = "crates/kargo-resolver" }
+kargo-maven = { path = "crates/kargo-maven" }
+kargo-compiler = { path = "crates/kargo-compiler" }
+kargo-plugin = { path = "crates/kargo-plugin" }
+kargo-lint = { path = "crates/kargo-lint" }
+kargo-toolchain = { path = "crates/kargo-toolchain" }
+
+# Test dependencies
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

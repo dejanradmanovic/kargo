@@ -1,0 +1,39 @@
+---
+description: Rust coding conventions for the Kargo codebase
+globs: ["**/*.rs"]
+---
+
+# Rust Coding Conventions
+
+## Error Handling
+- Use `thiserror` for error type definitions in library crates
+- Use `miette` for user-facing error reporting with context and help text
+- Never use `.unwrap()` or `.expect()` in library code (crates other than kargo-cli); use `?` or return `Result`
+- In kargo-cli (binary), `.expect()` is acceptable only in `main()` setup code
+- Propagate errors with `?`; add context via `.map_err()` or miette's `.wrap_err()`
+
+## Logging
+- Use `tracing` macros (`tracing::info!`, `tracing::debug!`, `tracing::warn!`, `tracing::error!`)
+- Never use `println!` or `eprintln!` for diagnostic output in library code
+- `println!` is acceptable in CLI command handlers for user-facing output
+
+## API Design
+- Prefer `&str` over `String` in function parameters when ownership is not needed
+- Prefer `&Path` over `PathBuf` in function parameters
+- Use `impl Into<String>` or `impl AsRef<Path>` for builder-pattern APIs
+- Return owned types (`String`, `PathBuf`, `Vec`) from functions
+
+## Types
+- Use `BTreeMap` over `HashMap` when deterministic ordering matters (manifests, lockfiles, serialization)
+- Derive `Debug, Clone, Serialize, Deserialize` on all public data types
+- Use `#[serde(rename_all = "kebab-case")]` for TOML field names matching Kargo.toml conventions
+
+## Testing
+- Unit tests go in the same file as the code they test, inside `#[cfg(test)] mod tests { ... }`
+- Integration tests go in `/tests/` directory
+- Use `assert_eq!` with descriptive messages
+
+## Dependencies
+- All external crate versions are managed in the workspace `[workspace.dependencies]` section
+- Individual crate Cargo.toml files use `.workspace = true` to reference workspace deps
+- Never pin a version in an individual crate's Cargo.toml

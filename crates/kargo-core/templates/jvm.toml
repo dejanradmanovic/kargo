@@ -1,0 +1,34 @@
+[template]
+name = "jvm"
+description = "JVM-only Kotlin application"
+
+[manifest]
+content = """
+[package]
+name = "{{project_name}}"
+version = "0.1.0"
+kotlin = "{{kotlin_version}}"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+
+[dev-dependencies]
+"""
+
+[[directories]]
+path = "src/main/kotlin"
+
+[[directories]]
+path = "src/test/kotlin"
+
+[[files]]
+path = "src/main/kotlin/Main.kt"
+content = """
+package com.example
+
+fun main() {
+    println("Hello from {{project_name}}!")
+}
+"""

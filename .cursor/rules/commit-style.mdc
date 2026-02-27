@@ -1,0 +1,45 @@
+---
+description: Git commit message conventions for the Kargo project
+globs: []
+---
+
+# Commit Message Style
+
+## Format
+Use Conventional Commits:
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+## Types
+- `feat`: New feature or capability
+- `fix`: Bug fix
+- `refactor`: Code restructuring without behavior change
+- `docs`: Documentation only
+- `test`: Adding or fixing tests
+- `chore`: Build config, dependencies, CI
+- `perf`: Performance improvement
+
+## Scopes (by crate)
+- `cli`: kargo-cli
+- `core`: kargo-core
+- `ops`: kargo-ops
+- `maven`: kargo-maven
+- `resolver`: kargo-resolver
+- `compiler`: kargo-compiler
+- `plugin`: kargo-plugin
+- `lint`: kargo-lint
+- `toolchain`: kargo-toolchain
+- `util`: kargo-util
+
+## Examples
+```
+feat(core): add flavor and variant types to manifest parsing
+fix(maven): handle missing checksum in POM metadata
+refactor(resolver): extract conflict resolution into separate module
+docs(cli): document --flavor and --variant flags
+test(core): add property interpolation edge cases
+chore: update workspace dependencies
+```

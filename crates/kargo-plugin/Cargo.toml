@@ -1,0 +1,17 @@
+[package]
+name = "kargo-plugin"
+description = "Plugin system: subcommand discovery, Rhai embedded scripting, WASM extensions (future), hook dispatch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-util.workspace = true
+rhai.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true

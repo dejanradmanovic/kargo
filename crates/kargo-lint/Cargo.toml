@@ -1,0 +1,17 @@
+[package]
+name = "kargo-lint"
+description = "Lint engine and code formatter for Kotlin: tree-sitter parsing, built-in rules, auto-fix, SARIF output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-util.workspace = true
+tree-sitter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true

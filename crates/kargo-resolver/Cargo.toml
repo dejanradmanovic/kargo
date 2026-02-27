@@ -1,0 +1,20 @@
+[package]
+name = "kargo-resolver"
+description = "Dependency resolution engine: Maven-compatible nearest-wins algorithm, transitive deps, scope propagation, lockfile management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-maven.workspace = true
+kargo-util.workspace = true
+petgraph.workspace = true
+semver.workspace = true
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true
+tokio.workspace = true

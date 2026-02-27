@@ -1,0 +1,22 @@
+[package]
+name = "catalog-project"
+version = "0.1.0"
+kotlin = "2.3.0"
+
+[targets.jvm]
+java-target = "21"
+
+[catalog.versions]
+kotlin = "2.3.0"
+coroutines = "1.8.0"
+ktor = "2.3.0"
+
+[catalog.libraries]
+kotlinx-coroutines = { group = "org.jetbrains.kotlinx", artifact = "kotlinx-coroutines-core", version = "1.8.0" }
+ktor-server-core = { group = "io.ktor", artifact = "ktor-server-core", version = "2.3.0" }
+
+[catalog.bundles]
+ktor-server = ["ktor-server-core"]
+
+[dependencies]
+kotlinx-coroutines = "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0"

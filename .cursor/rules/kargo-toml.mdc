@@ -1,0 +1,33 @@
+---
+description: Rules for working with the Kargo.toml manifest format
+globs: ["crates/kargo-core/src/manifest.rs", "crates/kargo-core/src/**/*.rs"]
+---
+
+# Kargo.toml Format Rules
+
+## Field Naming
+- Use kebab-case for all TOML keys (e.g., `java-target`, `build-config`, `max-line-length`)
+- Map to snake_case in Rust structs using `#[serde(rename = "kebab-name")]`
+
+## Adding New Config Fields
+1. Add the field to the appropriate struct in `crates/kargo-core/src/manifest.rs`
+2. Use `#[serde(default)]` for optional fields so existing Kargo.toml files remain valid
+3. Add the field to the `Kargo.toml` examples in `docs/ARCHITECTURE.md`
+4. If the field supports `${env:...}` interpolation, document it
+
+## Validation
+- Version strings must be valid semver
+- Target names must match the `KotlinTarget` enum in `target.rs`
+- Dependency shorthand must be parseable as `group:artifact:version`
+- Hook names must match known lifecycle phases
+
+## Property Interpolation
+- `${env:VAR}` references `.kargo.env` values or process environment variables
+- Interpolation is performed at manifest load time
+- Unresolved references should produce clear error messages, not silently empty strings (except during `kargo publish` which should hard-fail)
+- Build config values that need to be baked into the app belong in `Kargo.toml` directly (e.g. `[flavors.*.build-config]`)
+
+## Format Preservation
+- Use `toml_edit` (not `toml`) when modifying Kargo.toml programmatically (e.g., `kargo add`)
+- Preserve comments and formatting when editing
+- Add new dependencies in alphabetical order within their section

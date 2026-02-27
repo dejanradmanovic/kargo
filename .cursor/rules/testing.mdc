@@ -1,0 +1,32 @@
+---
+description: Testing conventions for the Kargo project
+globs: ["**/*.rs", "tests/**"]
+---
+
+# Testing Conventions
+
+## Test Organization
+- Unit tests: in the tests folder which lives in parallel with the src folder
+- Integration tests: in `tests/` at workspace root
+- Test fixtures (sample Kargo.toml files, mock Maven repos): in `tests/fixtures/`
+
+## What to Test
+- Manifest parsing: valid and invalid Kargo.toml files
+- Environment interpolation: `${env:...}` substitution
+- Dependency resolution: transitive deps, conflicts, scope propagation, exclusions
+- Maven protocol: POM parsing, metadata parsing, URL layout construction
+- CLI commands: use snapshot testing for output verification
+- Version parsing: semver edge cases
+
+## Test Naming
+- Use descriptive names: `test_parse_manifest_with_flavors`, `test_resolve_conflict_nearest_wins`
+- Prefix with `test_` (Rust convention)
+
+## Assertions
+- Use `assert_eq!(actual, expected, "descriptive message")` for equality
+- Use `assert!(condition, "what went wrong")` for boolean checks
+- For error cases, use `assert!(result.is_err())` and verify the error message
+
+## Fixtures
+- Keep fixture files small and focused on one test scenario
+- Name fixtures descriptively: `simple-jvm.toml`, `kmp-with-flavors.toml`, `invalid-missing-name.toml`

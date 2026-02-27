@@ -1,0 +1,23 @@
+[package]
+name = "kargo-ops"
+description = "High-level operations wiring CLI commands to core subsystems: build, run, test, add, remove, publish, package, audit, etc."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kargo-core.workspace = true
+kargo-util.workspace = true
+kargo-resolver.workspace = true
+kargo-maven.workspace = true
+kargo-compiler.workspace = true
+kargo-plugin.workspace = true
+kargo-lint.workspace = true
+kargo-toolchain.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+tracing.workspace = true

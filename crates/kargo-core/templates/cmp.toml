@@ -1,0 +1,80 @@
+[template]
+name = "cmp"
+description = "Compose Multiplatform project (JVM + Android + iOS + Desktop)"
+
+[manifest]
+content = """
+[package]
+name = "{{project_name}}"
+version = "0.1.0"
+kotlin = "{{kotlin_version}}"
+
+[targets]
+jvm = { java-target = "21" }
+android = { min-sdk = 24, target-sdk = 35, compile-sdk = 35 }
+ios-arm64 = {}
+ios-simulator-arm64 = {}
+
+[compose]
+enabled = true
+
+[dependencies]
+
+[dev-dependencies]
+"""
+
+[[directories]]
+path = "src/commonMain/kotlin"
+
+[[directories]]
+path = "src/commonMain/resources"
+
+[[directories]]
+path = "src/commonTest/kotlin"
+
+[[directories]]
+path = "src/jvmMain/kotlin"
+
+[[directories]]
+path = "src/jvmTest/kotlin"
+
+[[directories]]
+path = "src/androidMain/kotlin"
+
+[[directories]]
+path = "src/androidTest/kotlin"
+
+[[directories]]
+path = "src/iosMain/kotlin"
+
+[[directories]]
+path = "src/iosTest/kotlin"
+
+[[directories]]
+path = "src/desktopMain/kotlin"
+
+[[directories]]
+path = "src/desktopTest/kotlin"
+
+[[files]]
+path = "src/commonMain/kotlin/App.kt"
+content = """
+package com.example
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+
+@Composable
+fun App() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Hello from {{project_name}}!")
+    }
+}
+"""

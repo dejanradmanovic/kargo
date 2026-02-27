@@ -1,0 +1,40 @@
+---
+description: Rules for Maven repository protocol implementation
+globs: ["crates/kargo-maven/**/*.rs", "crates/kargo-resolver/**/*.rs"]
+---
+
+# Maven Compatibility Rules
+
+## Checksum Verification
+- Always verify SHA-256 (preferred) or SHA-1 checksums on downloaded artifacts
+- Never skip checksum verification, even in development mode
+- If checksum files are missing from the repository, log a warning but don't fail
+
+## HTTP Error Handling
+- Retry transient failures (HTTP 429, 502, 503, 504) with exponential backoff
+- Respect `Retry-After` headers
+- Give clear error messages for 401 (auth required) and 404 (artifact not found)
+- Set a reasonable timeout (30s connect, 120s transfer)
+
+## Caching
+- Cache aggressively: once a release artifact is downloaded and verified, it should never be re-downloaded
+- SNAPSHOT versions must check for updates on every build (unless `--offline`)
+- Use `maven-metadata.xml` timestamps to determine if a SNAPSHOT needs updating
+- Local cache layout must mirror Maven repository layout: `{groupId}/{artifactId}/{version}/`
+
+## POM Parsing
+- Support full POM inheritance (parent POM resolution)
+- Interpolate `${project.version}`, `${project.groupId}`, and custom properties
+- Handle `<dependencyManagement>` and BOM imports (`<scope>import</scope>`)
+- Respect `<exclusions>` in dependency declarations
+- Handle `<optional>true</optional>` by not pulling transitives
+
+## Gradle Module Metadata
+- When a `.module` file exists alongside a POM, prefer it for variant-aware resolution
+- This is critical for KMP artifacts which publish platform-specific variants
+- Fall back to POM if `.module` parsing fails
+
+## Version Handling
+- Support Maven version ranges (e.g., `[1.0,2.0)`)
+- Respect `<release>` and `<latest>` in `maven-metadata.xml`
+- SNAPSHOT versions resolve via timestamped artifacts in version-level metadata

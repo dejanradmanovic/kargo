@@ -1,0 +1,1 @@
+//! Operation: remove build artifacts.

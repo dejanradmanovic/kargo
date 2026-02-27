@@ -1,0 +1,6 @@
+[package]
+version = "0.1.0"
+kotlin = "2.3.0"
+
+[dependencies]
+some-dep = "com.example:dep:1.0.0"

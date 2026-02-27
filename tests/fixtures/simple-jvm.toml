@@ -1,0 +1,22 @@
+[package]
+name = "my-jvm-app"
+version = "0.1.0"
+kotlin = "2.3.0"
+description = "A simple JVM application"
+authors = ["Test Author <test@example.com>"]
+license = "MIT"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+kotlinx-coroutines = "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0"
+
+[dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"
+
+[profile.dev]
+debug = true
+
+[profile.release]
+optimization = true

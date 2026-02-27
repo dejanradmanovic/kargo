@@ -1,0 +1,35 @@
+[package]
+name = "flavored-app"
+version = "1.0.0"
+kotlin = "2.3.0"
+
+[targets.jvm]
+java-target = "21"
+
+[flavors]
+dimensions = ["tier", "environment"]
+default = { tier = "paid", environment = "staging" }
+
+[flavors.tier.free]
+build-config = { IS_PAID = "false", AD_SUPPORTED = "true" }
+application-id-suffix = ".free"
+
+[flavors.tier.paid]
+build-config = { IS_PAID = "true", AD_SUPPORTED = "false" }
+application-id-suffix = ".paid"
+
+[flavors.environment.staging]
+build-config = { API_URL = "https://staging.api.example.com" }
+application-id-suffix = ".staging"
+
+[flavors.environment.production]
+build-config = { API_URL = "https://api.example.com" }
+
+[dependencies]
+kotlinx-coroutines = "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0"
+
+[flavor.free.dependencies]
+ad-sdk = "com.example:ad-sdk:2.0.0"
+
+[flavor.paid.dependencies]
+premium-features = "com.example:premium:1.0.0"

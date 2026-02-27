@@ -1,0 +1,32 @@
+[template]
+name = "lib"
+description = "JVM Kotlin library"
+
+[manifest]
+content = """
+[package]
+name = "{{project_name}}"
+version = "0.1.0"
+kotlin = "{{kotlin_version}}"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+
+[dev-dependencies]
+"""
+
+[[directories]]
+path = "src/main/kotlin"
+
+[[directories]]
+path = "src/test/kotlin"
+
+[[files]]
+path = "src/main/kotlin/Lib.kt"
+content = """
+package com.example
+
+fun greeting(): String = "Hello from {{project_name}}!"
+"""
