@@ -1,5 +1,6 @@
 //! Operation: resolve and download all dependencies.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use kargo_core::lockfile::{Lockfile, ResolvedPackageInfo};
@@ -7,6 +8,7 @@ use kargo_core::manifest::Manifest;
 use kargo_maven::cache::LocalCache;
 use kargo_maven::download;
 use kargo_resolver::resolver::{self, ResolutionResult};
+use kargo_util::hash::sha256_bytes;
 
 /// Fetch all dependencies: resolve, download artifacts to the project cache,
 /// and update the lockfile.
@@ -34,13 +36,21 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let artifact_count = result.artifacts.len();
     let mut downloaded = 0u32;
     let mut up_to_date = 0u32;
+    let mut checksums: HashMap<String, String> = HashMap::new();
 
     for artifact in &result.artifacts {
-        let already_cached =
-            cache.has_artifact(&artifact.group, &artifact.artifact, &artifact.version);
+        let coord_key = format!(
+            "{}:{}:{}",
+            artifact.group, artifact.artifact, artifact.version
+        );
 
-        if already_cached {
+        if let Some(jar_path) =
+            cache.get_jar(&artifact.group, &artifact.artifact, &artifact.version, None)
+        {
             up_to_date += 1;
+            if let Ok(data) = std::fs::read(&jar_path) {
+                checksums.insert(coord_key, sha256_bytes(&data));
+            }
             continue;
         }
 
@@ -51,6 +61,7 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
             match download::download_artifact(&client, repo, &url, &label).await? {
                 Some(data) => {
                     kargo_maven::checksum::verify(&client, repo, &url, &data).await?;
+                    checksums.insert(coord_key.clone(), sha256_bytes(&data));
                     cache.put_jar(
                         &artifact.group,
                         &artifact.artifact,
@@ -82,7 +93,7 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
         .collect();
     let pruned = cache.prune(&keep);
 
-    let lock_packages = resolution_to_lockfile_packages(&result);
+    let lock_packages = resolution_to_lockfile_packages(&result, &checksums);
     let lockfile = Lockfile::generate(lock_packages);
     lockfile.write_to(&lockfile_path)?;
 
@@ -139,23 +150,29 @@ pub fn collect_declared_deps(manifest: &Manifest) -> Vec<(String, String, String
 }
 
 /// Convert resolution results into lockfile package descriptors.
-pub fn resolution_to_lockfile_packages(result: &ResolutionResult) -> Vec<ResolvedPackageInfo> {
+pub fn resolution_to_lockfile_packages(
+    result: &ResolutionResult,
+    checksums: &HashMap<String, String>,
+) -> Vec<ResolvedPackageInfo> {
     result
         .artifacts
         .iter()
-        .map(|a| ResolvedPackageInfo {
-            group: a.group.clone(),
-            artifact: a.artifact.clone(),
-            version: a.version.clone(),
-            scope: Some(a.scope.clone()),
-            source: Some(a.source.clone()),
-            checksum: a.checksum.clone(),
-            targets: vec![],
-            dependencies: a
-                .dependencies
-                .iter()
-                .map(|d| (d.group.clone(), d.artifact.clone(), d.version.clone()))
-                .collect(),
+        .map(|a| {
+            let coord_key = format!("{}:{}:{}", a.group, a.artifact, a.version);
+            ResolvedPackageInfo {
+                group: a.group.clone(),
+                artifact: a.artifact.clone(),
+                version: a.version.clone(),
+                scope: Some(a.scope.clone()),
+                source: Some(a.source.clone()),
+                checksum: checksums.get(&coord_key).cloned(),
+                targets: vec![],
+                dependencies: a
+                    .dependencies
+                    .iter()
+                    .map(|d| (d.group.clone(), d.artifact.clone(), d.version.clone()))
+                    .collect(),
+            }
         })
         .collect()
 }

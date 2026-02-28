@@ -1,5 +1,6 @@
 //! Operation: resolve all dependencies and regenerate Kargo.lock.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use kargo_core::lockfile::Lockfile;
@@ -7,6 +8,7 @@ use kargo_core::manifest::Manifest;
 use kargo_maven::cache::LocalCache;
 use kargo_maven::download;
 use kargo_resolver::resolver;
+use kargo_util::hash::sha256_bytes;
 
 use crate::ops_fetch::resolution_to_lockfile_packages;
 
@@ -26,7 +28,23 @@ pub async fn lock(project_root: &Path, verbose: bool) -> miette::Result<()> {
         eprintln!("{}", result.conflicts);
     }
 
-    let lock_packages = resolution_to_lockfile_packages(&result);
+    // Compute checksums from cached JARs if available
+    let mut checksums: HashMap<String, String> = HashMap::new();
+    for artifact in &result.artifacts {
+        if let Some(jar_path) =
+            cache.get_jar(&artifact.group, &artifact.artifact, &artifact.version, None)
+        {
+            if let Ok(data) = std::fs::read(&jar_path) {
+                let key = format!(
+                    "{}:{}:{}",
+                    artifact.group, artifact.artifact, artifact.version
+                );
+                checksums.insert(key, sha256_bytes(&data));
+            }
+        }
+    }
+
+    let lock_packages = resolution_to_lockfile_packages(&result, &checksums);
     let lockfile = Lockfile::generate(lock_packages);
     let lockfile_path = project_root.join("Kargo.lock");
     lockfile.write_to(&lockfile_path)?;
