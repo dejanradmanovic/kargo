@@ -1,7 +1,6 @@
 //! Xcode / Apple SDK detection.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 /// Information about a discovered Xcode installation.
 #[derive(Debug, Clone)]
@@ -19,6 +18,8 @@ pub fn discover_xcode() -> Option<XcodeInfo> {
 
     #[cfg(target_os = "macos")]
     {
+        use std::process::Command;
+
         let sdk_output = Command::new("xcrun")
             .args(["--show-sdk-path"])
             .output()
