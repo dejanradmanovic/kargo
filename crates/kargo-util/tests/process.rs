@@ -35,15 +35,30 @@ fn test_builder_with_env() {
 #[test]
 fn test_builder_with_cwd() {
     let tmp = tempfile::TempDir::new().unwrap();
+
+    #[cfg(unix)]
     let output = CommandBuilder::new("pwd")
         .cwd(tmp.path().to_str().unwrap())
         .exec()
         .unwrap();
+
+    #[cfg(windows)]
+    let output = CommandBuilder::new("cmd")
+        .args(["/C", "cd"])
+        .cwd(tmp.path().to_str().unwrap())
+        .exec()
+        .unwrap();
+
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let actual = std::path::PathBuf::from(stdout.trim());
+    let expected = tmp.path().canonicalize().unwrap();
+
+    // Compare using dunce-style stripping: on Windows canonicalize() produces
+    // UNC paths (\\?\C:\...) while `cd` returns plain paths (C:\...).
     assert_eq!(
-        std::path::PathBuf::from(stdout.trim()),
-        tmp.path().canonicalize().unwrap()
+        actual.components().collect::<Vec<_>>(),
+        expected.components().collect::<Vec<_>>()
     );
 }
 
