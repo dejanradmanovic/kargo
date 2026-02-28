@@ -29,7 +29,9 @@ pub fn discover_xcode() -> Option<XcodeInfo> {
         }
 
         let sdk_path = PathBuf::from(
-            String::from_utf8_lossy(&sdk_output.stdout).trim().to_string(),
+            String::from_utf8_lossy(&sdk_output.stdout)
+                .trim()
+                .to_string(),
         );
 
         let version = Command::new("xcodebuild")

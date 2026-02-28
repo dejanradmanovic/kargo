@@ -40,7 +40,11 @@ pub fn cmd_info(pkg_version: &str) -> Result<()> {
         println!("  Default Kotlin: {d}");
     }
     for v in &toolchains {
-        let marker = if Some(v) == default.as_ref() { " *" } else { "" };
+        let marker = if Some(v) == default.as_ref() {
+            " *"
+        } else {
+            ""
+        };
         println!("    - {v}{marker}");
     }
 
@@ -81,11 +85,7 @@ pub fn cmd_info(pkg_version: &str) -> Result<()> {
 
     if let Some(xcode) = sdk::discover_xcode() {
         let ver = xcode.version.as_deref().unwrap_or("unknown");
-        println!(
-            "  Xcode:          {} ({})",
-            xcode.sdk_path.display(),
-            ver
-        );
+        println!("  Xcode:          {} ({})", xcode.sdk_path.display(), ver);
     }
 
     Ok(())
@@ -98,10 +98,7 @@ pub fn cmd_clean() -> Result<()> {
     if cache_dir.is_dir() {
         let size = dir_size(&cache_dir);
         fs::remove_dir_all(&cache_dir).map_err(kargo_util::errors::KargoError::Io)?;
-        println!(
-            "  Removed dependency cache ({}).",
-            format_bytes(size)
-        );
+        println!("  Removed dependency cache ({}).", format_bytes(size));
         total_freed += size;
     }
 
@@ -109,10 +106,7 @@ pub fn cmd_clean() -> Result<()> {
     if build_cache.is_dir() {
         let size = dir_size(&build_cache);
         fs::remove_dir_all(&build_cache).map_err(kargo_util::errors::KargoError::Io)?;
-        println!(
-            "  Removed build cache ({}).",
-            format_bytes(size)
-        );
+        println!("  Removed build cache ({}).", format_bytes(size));
         total_freed += size;
     }
 
@@ -134,10 +128,7 @@ pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
             println!("  Already up to date (v{v}).");
         }
         UpdateCheck::Available(info) => {
-            println!(
-                "  Update available: {} -> {}",
-                info.current, info.latest
-            );
+            println!("  Update available: {} -> {}", info.current, info.latest);
 
             if check_only {
                 println!();
@@ -147,9 +138,7 @@ pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
 
             ops_self_update::apply_update(&info)?;
             println!();
-            println!(
-                "  Restart your shell or run `kargo --version` to verify."
-            );
+            println!("  Restart your shell or run `kargo --version` to verify.");
         }
     }
 

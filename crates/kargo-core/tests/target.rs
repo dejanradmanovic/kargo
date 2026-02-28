@@ -2,27 +2,33 @@ use kargo_core::target::KotlinTarget;
 
 #[test]
 fn from_str_jvm() {
-    assert_eq!(KotlinTarget::from_str("jvm"), Some(KotlinTarget::Jvm));
+    assert_eq!(KotlinTarget::parse("jvm"), Some(KotlinTarget::Jvm));
 }
 
 #[test]
 fn from_str_ios_arm64() {
-    assert_eq!(KotlinTarget::from_str("ios-arm64"), Some(KotlinTarget::IosArm64));
+    assert_eq!(
+        KotlinTarget::parse("ios-arm64"),
+        Some(KotlinTarget::IosArm64)
+    );
 }
 
 #[test]
 fn from_str_ios_arm64_camel_case() {
-    assert_eq!(KotlinTarget::from_str("iosArm64"), Some(KotlinTarget::IosArm64));
+    assert_eq!(
+        KotlinTarget::parse("iosArm64"),
+        Some(KotlinTarget::IosArm64)
+    );
 }
 
 #[test]
 fn from_str_invalid() {
-    assert_eq!(KotlinTarget::from_str("invalid"), None);
+    assert_eq!(KotlinTarget::parse("invalid"), None);
 }
 
 #[test]
 fn from_str_android() {
-    assert_eq!(KotlinTarget::from_str("android"), Some(KotlinTarget::Android));
+    assert_eq!(KotlinTarget::parse("android"), Some(KotlinTarget::Android));
 }
 
 #[test]

@@ -58,5 +58,8 @@ jdk = "/usr/lib/jvm/java-21"
     assert_eq!(config.cache.dir, "/custom/cache");
     assert_eq!(config.cache.max_size.as_deref(), Some("5GB"));
     assert!(!config.toolchain.auto_download);
-    assert_eq!(config.toolchain.jdk.as_deref(), Some("/usr/lib/jvm/java-21"));
+    assert_eq!(
+        config.toolchain.jdk.as_deref(),
+        Some("/usr/lib/jvm/java-21")
+    );
 }

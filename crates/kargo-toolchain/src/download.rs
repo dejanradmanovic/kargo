@@ -9,8 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::version::KotlinVersion;
 
-const KOTLIN_RELEASE_BASE: &str =
-    "https://github.com/JetBrains/kotlin/releases/download";
+const KOTLIN_RELEASE_BASE: &str = "https://github.com/JetBrains/kotlin/releases/download";
 
 /// Build the download URL for a Kotlin compiler zip.
 pub fn compiler_zip_url(version: &KotlinVersion, mirror: Option<&str>) -> String {
@@ -56,11 +55,9 @@ pub fn download_file(url: &str, dest: &Path) -> miette::Result<PathBuf> {
     let pb = if total > 0 {
         let pb = ProgressBar::new(total);
         pb.set_style(
-            ProgressStyle::with_template(
-                "  {bar:40.cyan/dim} {bytes}/{total_bytes} ({eta})",
-            )
-            .unwrap()
-            .progress_chars("##-"),
+            ProgressStyle::with_template("  {bar:40.cyan/dim} {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .progress_chars("##-"),
         );
         Some(pb)
     } else {
@@ -120,7 +117,9 @@ pub fn verify_checksum(file: &Path, expected: &str) -> miette::Result<()> {
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];
     loop {
-        let n = f.read(&mut buf).map_err(kargo_util::errors::KargoError::Io)?;
+        let n = f
+            .read(&mut buf)
+            .map_err(kargo_util::errors::KargoError::Io)?;
         if n == 0 {
             break;
         }

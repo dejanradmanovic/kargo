@@ -74,10 +74,7 @@ pub fn discover_jdk(config_jdk: Option<&str>) -> Option<JdkInfo> {
 ///
 /// Searches the same locations as [`discover_jdk`] but filters out JDKs
 /// whose version is too low. Returns `None` if no compatible JDK is found.
-pub fn discover_jdk_for_target(
-    config_jdk: Option<&str>,
-    required_major: u32,
-) -> Option<JdkInfo> {
+pub fn discover_jdk_for_target(config_jdk: Option<&str>, required_major: u32) -> Option<JdkInfo> {
     let accept = |info: &JdkInfo| jdk_major(&info.version) >= required_major;
 
     if let Some(path) = config_jdk {
@@ -128,13 +125,9 @@ fn discover_managed_jdk(min_major: Option<u32>) -> Option<JdkInfo> {
             let p = entry.path();
             validate_jdk(&p).map(|info| (p, info))
         })
-        .filter(|(_, info)| {
-            min_major.map_or(true, |min| jdk_major(&info.version) >= min)
-        })
+        .filter(|(_, info)| min_major.map_or(true, |min| jdk_major(&info.version) >= min))
         .collect();
-    found.sort_by(|a, b| {
-        jdk_major(&b.1.version).cmp(&jdk_major(&a.1.version))
-    });
+    found.sort_by(|a, b| jdk_major(&b.1.version).cmp(&jdk_major(&a.1.version)));
     found.into_iter().next().map(|(_, info)| info)
 }
 
@@ -149,10 +142,7 @@ pub fn validate_jdk(home: &Path) -> Option<JdkInfo> {
         return None;
     }
 
-    let output = Command::new(&java)
-        .arg("-version")
-        .output()
-        .ok()?;
+    let output = Command::new(&java).arg("-version").output().ok()?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let version = parse_java_version(&stderr)?;
@@ -196,8 +186,12 @@ fn common_jdk_paths() -> Vec<PathBuf> {
                 }
             }
         }
-        paths.push(PathBuf::from("/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home"));
-        paths.push(PathBuf::from("/usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home"));
+        paths.push(PathBuf::from(
+            "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home",
+        ));
+        paths.push(PathBuf::from(
+            "/usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home",
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -213,7 +207,10 @@ fn common_jdk_paths() -> Vec<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        for base in &["C:\\Program Files\\Java", "C:\\Program Files\\Eclipse Adoptium"] {
+        for base in &[
+            "C:\\Program Files\\Java",
+            "C:\\Program Files\\Eclipse Adoptium",
+        ] {
             let dir = PathBuf::from(base);
             if let Ok(entries) = fs::read_dir(&dir) {
                 for entry in entries.filter_map(|e| e.ok()) {
@@ -284,7 +281,11 @@ pub fn install_jdk(java_version: &str, distribution: JdkDistribution) -> miette:
     println!("  Installing {distribution} JDK {java_version}...");
 
     let tmp_dir = tempfile::tempdir().map_err(KargoError::Io)?;
-    let archive_name = if cfg!(windows) { "jdk.zip" } else { "jdk.tar.gz" };
+    let archive_name = if cfg!(windows) {
+        "jdk.zip"
+    } else {
+        "jdk.tar.gz"
+    };
     let archive_path = tmp_dir.path().join(archive_name);
 
     download::download_file(&url, &archive_path)?;
@@ -301,7 +302,11 @@ pub fn install_jdk(java_version: &str, distribution: JdkDistribution) -> miette:
 
     match validate_jdk(&dest) {
         Some(info) => {
-            println!("  JDK {} installed at {}", info.version, info.home.display());
+            println!(
+                "  JDK {} installed at {}",
+                info.version,
+                info.home.display()
+            );
             Ok(info)
         }
         None => Err(KargoError::Toolchain {
@@ -405,11 +410,7 @@ pub fn remove_jdk(major_version: &str) -> miette::Result<u32> {
         if let Some(info) = validate_jdk(&path) {
             if info.version == major_version {
                 fs::remove_dir_all(&path).map_err(KargoError::Io)?;
-                println!(
-                    "  Removed JDK {} at {}",
-                    info.version,
-                    path.display()
-                );
+                println!("  Removed JDK {} at {}", info.version, path.display());
                 removed += 1;
             }
         }
@@ -453,18 +454,13 @@ fn flatten_jdk_dir(dir: &Path) -> miette::Result<()> {
             ));
             fs::rename(dir, &tmp).map_err(KargoError::Io)?;
             fs::rename(
-                &jdk_home
+                jdk_home
                     .to_string_lossy()
-                    .replace(
-                        &dir.to_string_lossy().to_string(),
-                        &tmp.to_string_lossy().to_string(),
-                    ),
+                    .replace(&*dir.to_string_lossy(), &tmp.to_string_lossy()),
                 dir,
             )
             .or_else(|_| {
-                let src = tmp.join(
-                    jdk_home.strip_prefix(dir).unwrap_or(jdk_home.as_path()),
-                );
+                let src = tmp.join(jdk_home.strip_prefix(dir).unwrap_or(jdk_home.as_path()));
                 if src.is_dir() {
                     fs::rename(&src, dir)
                 } else {

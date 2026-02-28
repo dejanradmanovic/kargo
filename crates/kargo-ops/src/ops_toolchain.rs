@@ -47,11 +47,12 @@ pub fn cmd_install(
     }
 
     if let Some(ver_str) = &kotlin_version {
-        let version: KotlinVersion = ver_str.parse().map_err(|e| {
-            kargo_util::errors::KargoError::Toolchain {
-                message: format!("Invalid version '{ver_str}': {e}"),
-            }
-        })?;
+        let version: KotlinVersion =
+            ver_str
+                .parse()
+                .map_err(|e| kargo_util::errors::KargoError::Toolchain {
+                    message: format!("Invalid version '{ver_str}': {e}"),
+                })?;
 
         let from = if version_str.is_some() {
             "argument"
@@ -77,11 +78,9 @@ pub fn cmd_install(
 
     if wants_jdk {
         let explicit_jdk = jdk_version.unwrap_or("21");
-        let manifest_java_target = manifest.as_ref().and_then(|m| {
-            m.targets
-                .values()
-                .find_map(|tc| tc.java_target.clone())
-        });
+        let manifest_java_target = manifest
+            .as_ref()
+            .and_then(|m| m.targets.values().find_map(|tc| tc.java_target.clone()));
 
         let (java_ver, from) = if explicit_jdk != "21" {
             (explicit_jdk.to_string(), "argument")
@@ -117,10 +116,7 @@ pub fn cmd_install(
             .and_then(|tc| tc.compile_sdk);
 
         let (compile_sdk, from) = if explicit_android != "35" {
-            (
-                explicit_android.parse::<u32>().unwrap_or(35),
-                "argument",
-            )
+            (explicit_android.parse::<u32>().unwrap_or(35), "argument")
         } else if let Some(sdk_level) = manifest_compile_sdk {
             (sdk_level, "Kargo.toml")
         } else {
@@ -131,13 +127,9 @@ pub fn cmd_install(
             Some(info) => {
                 println!("  Android SDK found at {}", info.home.display());
                 if sdk::has_platform(&info, compile_sdk) {
-                    println!(
-                        "  android-{compile_sdk} already installed (from {from})."
-                    );
+                    println!("  android-{compile_sdk} already installed (from {from}).");
                 } else {
-                    println!(
-                        "  android-{compile_sdk} missing (from {from}), installing..."
-                    );
+                    println!("  android-{compile_sdk} missing (from {from}), installing...");
                     sdk::ensure_android_components(&info, compile_sdk)?;
                 }
             }
@@ -223,11 +215,11 @@ pub fn cmd_remove(
     }
 
     if let Some(ver) = version_str {
-        let version: KotlinVersion = ver.parse().map_err(|e| {
-            kargo_util::errors::KargoError::Toolchain {
-                message: format!("Invalid version '{ver}': {e}"),
-            }
-        })?;
+        let version: KotlinVersion =
+            ver.parse()
+                .map_err(|e| kargo_util::errors::KargoError::Toolchain {
+                    message: format!("Invalid version '{ver}': {e}"),
+                })?;
 
         let is_default = install::get_default().as_ref() == Some(&version);
         install::uninstall_kotlin(&version)?;
@@ -245,8 +237,7 @@ pub fn cmd_remove(
     if android {
         let dir = sdk::managed_android_sdk_dir();
         if dir.is_dir() {
-            std::fs::remove_dir_all(&dir)
-                .map_err(kargo_util::errors::KargoError::Io)?;
+            std::fs::remove_dir_all(&dir).map_err(kargo_util::errors::KargoError::Io)?;
             println!("  Removed managed Android SDK at {}", dir.display());
         } else {
             println!(
@@ -261,11 +252,12 @@ pub fn cmd_remove(
 }
 
 pub fn cmd_use(version_str: &str) -> Result<()> {
-    let version: KotlinVersion = version_str.parse().map_err(|e| {
-        kargo_util::errors::KargoError::Toolchain {
-            message: format!("Invalid version '{version_str}': {e}"),
-        }
-    })?;
+    let version: KotlinVersion =
+        version_str
+            .parse()
+            .map_err(|e| kargo_util::errors::KargoError::Toolchain {
+                message: format!("Invalid version '{version_str}': {e}"),
+            })?;
 
     if !install::is_installed(&version) {
         println!("  Kotlin {version} is not installed. Installing...");
@@ -290,11 +282,10 @@ pub fn cmd_path() -> Result<PathBuf> {
         mirror,
     )
     .or_else(|_| {
-        let default = install::get_default().ok_or_else(|| {
-            kargo_util::errors::KargoError::Toolchain {
+        let default =
+            install::get_default().ok_or_else(|| kargo_util::errors::KargoError::Toolchain {
                 message: "No Kargo project found and no default toolchain set".to_string(),
-            }
-        })?;
+            })?;
         kargo_toolchain::discovery::resolve_toolchain(
             &default,
             config.toolchain.auto_download,

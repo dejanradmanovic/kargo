@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+#[allow(deprecated)]
 fn kargo_cmd() -> Command {
     Command::cargo_bin("kargo").unwrap()
 }
@@ -35,7 +36,9 @@ fn test_env_empty_project_shows_no_entries() {
         .args(["env"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No environment variables configured."));
+        .stdout(predicate::str::contains(
+            "No environment variables configured.",
+        ));
 }
 
 #[test]
@@ -80,11 +83,7 @@ fn test_env_reveal_shows_values() {
         .success();
 
     let project_dir = tmp.path().join(project_name);
-    fs::write(
-        project_dir.join(".kargo.env"),
-        "MAVEN_TOKEN=abc123\n",
-    )
-    .unwrap();
+    fs::write(project_dir.join(".kargo.env"), "MAVEN_TOKEN=abc123\n").unwrap();
 
     kargo_cmd()
         .current_dir(&project_dir)

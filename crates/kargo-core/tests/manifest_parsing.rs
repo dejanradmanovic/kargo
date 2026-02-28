@@ -17,14 +17,14 @@ fn test_parse_simple_jvm_fixture() {
     assert_eq!(manifest.package.name, "my-jvm-app");
     assert_eq!(manifest.package.version, "0.1.0");
     assert_eq!(manifest.package.kotlin, "2.3.0");
-    assert_eq!(manifest.package.description.as_deref(), Some("A simple JVM application"));
+    assert_eq!(
+        manifest.package.description.as_deref(),
+        Some("A simple JVM application")
+    );
     assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
     assert_eq!(manifest.targets.len(), 1);
     assert!(manifest.targets.contains_key("jvm"));
-    assert_eq!(
-        manifest.targets["jvm"].java_target.as_deref(),
-        Some("21")
-    );
+    assert_eq!(manifest.targets["jvm"].java_target.as_deref(), Some("21"));
     assert_eq!(manifest.dependencies.len(), 1);
     assert_eq!(manifest.dev_dependencies.len(), 1);
     assert_eq!(manifest.profile.len(), 2);
@@ -83,7 +83,10 @@ fn test_parse_with_catalog_fixture() {
 fn test_parse_invalid_missing_name_fixture() {
     let path = fixtures_dir().join("invalid-missing-name.toml");
     let result = Manifest::from_path(&path);
-    assert!(result.is_err(), "Manifest without name should fail to parse");
+    assert!(
+        result.is_err(),
+        "Manifest without name should fail to parse"
+    );
 }
 
 #[test]

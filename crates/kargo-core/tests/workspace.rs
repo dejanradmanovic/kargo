@@ -4,7 +4,7 @@ use kargo_core::workspace::Workspace;
 use std::path::PathBuf;
 
 fn dummy_package(root: PathBuf) -> Package {
-    let manifest = Manifest::from_str(
+    let manifest = Manifest::parse_toml(
         r#"
 [package]
 name = "test"

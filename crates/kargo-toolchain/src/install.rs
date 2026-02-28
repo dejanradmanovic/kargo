@@ -30,10 +30,7 @@ pub fn is_installed(version: &KotlinVersion) -> bool {
 }
 
 /// Download, verify, extract, and register a Kotlin compiler version.
-pub fn install_kotlin(
-    version: &KotlinVersion,
-    mirror: Option<&str>,
-) -> miette::Result<PathBuf> {
+pub fn install_kotlin(version: &KotlinVersion, mirror: Option<&str>) -> miette::Result<PathBuf> {
     let dest = toolchain_dir(version);
     if dest.is_dir() {
         println!("  Kotlin {version} is already installed.");
@@ -43,7 +40,9 @@ pub fn install_kotlin(
     println!("  Downloading Kotlin {version}...");
 
     let tmp_dir = tempfile::tempdir().map_err(KargoError::Io)?;
-    let zip_path = tmp_dir.path().join(format!("kotlin-compiler-{version}.zip"));
+    let zip_path = tmp_dir
+        .path()
+        .join(format!("kotlin-compiler-{version}.zip"));
 
     let url = download::compiler_zip_url(version, mirror);
     download::download_file(&url, &zip_path)?;
@@ -179,8 +178,7 @@ fn flatten_single_child(dir: &Path) -> miette::Result<()> {
             dir.file_name().unwrap().to_string_lossy()
         ));
         fs::rename(dir, &tmp_name).map_err(KargoError::Io)?;
-        fs::rename(tmp_name.join(child.file_name().unwrap()), dir)
-            .map_err(KargoError::Io)?;
+        fs::rename(tmp_name.join(child.file_name().unwrap()), dir).map_err(KargoError::Io)?;
         fs::remove_dir_all(&tmp_name).map_err(KargoError::Io)?;
     }
     Ok(())

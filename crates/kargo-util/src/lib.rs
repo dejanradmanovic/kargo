@@ -4,6 +4,10 @@
 //! error types, filesystem helpers, cryptographic hashing, process spawning,
 //! and terminal progress indicators.
 
+// thiserror's Display impl for `Manifest { message }` triggers a
+// false-positive `unused_assignments` lint in generated code.
+#![allow(unused_assignments)]
+
 pub mod errors;
 pub mod fs;
 pub mod hash;

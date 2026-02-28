@@ -44,19 +44,14 @@ pub struct Exclusion {
 }
 
 /// Maven-compatible dependency scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DependencyScope {
+    #[default]
     Compile,
     Runtime,
     Provided,
     Test,
-}
-
-impl Default for DependencyScope {
-    fn default() -> Self {
-        Self::Compile
-    }
 }
 
 /// Maven coordinates parsed from a shorthand string.

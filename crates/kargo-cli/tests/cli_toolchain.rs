@@ -1,16 +1,14 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+#[allow(deprecated)]
 fn kargo() -> Command {
     Command::cargo_bin("kargo").unwrap()
 }
 
 #[test]
 fn toolchain_list_runs() {
-    kargo()
-        .args(["toolchain", "list"])
-        .assert()
-        .success();
+    kargo().args(["toolchain", "list"]).assert().success();
 }
 
 #[test]
@@ -43,10 +41,7 @@ fn toolchain_remove_not_installed() {
 
 #[test]
 fn toolchain_install_no_args_fails() {
-    kargo()
-        .args(["toolchain", "install"])
-        .assert()
-        .failure();
+    kargo().args(["toolchain", "install"]).assert().failure();
 }
 
 #[test]
@@ -73,10 +68,7 @@ fn toolchain_install_jdk_with_version_accepted() {
 
 #[test]
 fn toolchain_remove_no_args_fails() {
-    kargo()
-        .args(["toolchain", "remove"])
-        .assert()
-        .failure();
+    kargo().args(["toolchain", "remove"]).assert().failure();
 }
 
 #[test]

@@ -50,7 +50,7 @@ optimization = true
 
 #[test]
 fn test_parse_minimal_manifest() {
-    let manifest = Manifest::from_str(MINIMAL_TOML).unwrap();
+    let manifest = Manifest::parse_toml(MINIMAL_TOML).unwrap();
     assert_eq!(manifest.package.name, "test-app");
     assert_eq!(manifest.package.version, "0.1.0");
     assert_eq!(manifest.package.kotlin, "2.3.0");
@@ -60,7 +60,7 @@ fn test_parse_minimal_manifest() {
 
 #[test]
 fn test_parse_kmp_manifest() {
-    let manifest = Manifest::from_str(KMP_TOML).unwrap();
+    let manifest = Manifest::parse_toml(KMP_TOML).unwrap();
     assert_eq!(manifest.package.name, "kmp-app");
     assert_eq!(manifest.package.description.as_deref(), Some("A KMP app"));
     assert_eq!(manifest.package.authors.len(), 1);
@@ -88,7 +88,7 @@ kotlin = "2.3.0"
 [repositories]
 central = "https://repo.maven.apache.org/maven2"
 "#;
-    let manifest = Manifest::from_str(toml).unwrap();
+    let manifest = Manifest::parse_toml(toml).unwrap();
     assert_eq!(manifest.repositories.len(), 1);
 }
 
@@ -98,7 +98,7 @@ fn test_parse_manifest_missing_package_fails() {
 [dependencies]
 foo = "bar"
 "#;
-    let result = Manifest::from_str(toml);
+    let result = Manifest::parse_toml(toml);
     assert!(result.is_err());
 }
 
@@ -109,13 +109,13 @@ fn test_parse_manifest_missing_name_fails() {
 version = "0.1.0"
 kotlin = "2.3.0"
 "#;
-    let result = Manifest::from_str(toml);
+    let result = Manifest::parse_toml(toml);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_parse_manifest_empty_string_fails() {
-    let result = Manifest::from_str("");
+    let result = Manifest::parse_toml("");
     assert!(result.is_err());
 }
 
@@ -131,7 +131,7 @@ kotlin = "2.3.0"
 jdk = "21"
 auto-download = false
 "#;
-    let manifest = Manifest::from_str(toml).unwrap();
+    let manifest = Manifest::parse_toml(toml).unwrap();
     let tc = manifest.toolchain.unwrap();
     assert_eq!(tc.jdk.as_deref(), Some("21"));
     assert_eq!(tc.auto_download, Some(false));
@@ -148,7 +148,7 @@ kotlin = "2.3.0"
 [workspace]
 members = ["app", "shared", "libs/*"]
 "#;
-    let manifest = Manifest::from_str(toml).unwrap();
+    let manifest = Manifest::parse_toml(toml).unwrap();
     let ws = manifest.workspace.unwrap();
     assert_eq!(ws.members.len(), 3);
 }
@@ -173,7 +173,7 @@ android = { min-sdk = 24, target-sdk = 35, compile-sdk = 35 }
 ios-arm64 = {}
 ios-simulator-arm64 = {}
 "#;
-    let manifest = Manifest::from_str(toml).unwrap();
+    let manifest = Manifest::parse_toml(toml).unwrap();
     assert_eq!(manifest.targets.len(), 4);
     let android = manifest.targets.get("android").unwrap();
     assert_eq!(android.min_sdk, Some(24));
@@ -199,7 +199,7 @@ min-sdk = 24
 target-sdk = 35
 compile-sdk = 35
 "#;
-    let manifest = Manifest::from_str(toml).unwrap();
+    let manifest = Manifest::parse_toml(toml).unwrap();
     assert_eq!(manifest.targets.len(), 4);
     let android = manifest.targets.get("android").unwrap();
     assert_eq!(android.min_sdk, Some(24));

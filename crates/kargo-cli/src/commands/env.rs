@@ -6,16 +6,19 @@ use kargo_util::fs::find_ancestor_with;
 
 pub fn exec(reveal: bool) -> Result<()> {
     let cwd = std::env::current_dir().map_err(KargoError::Io)?;
-    let project_root = find_ancestor_with(&cwd, "Kargo.toml").ok_or_else(|| KargoError::Manifest {
-        message: "Could not find Kargo.toml in this directory or any parent".to_string(),
-    })?;
+    let project_root =
+        find_ancestor_with(&cwd, "Kargo.toml").ok_or_else(|| KargoError::Manifest {
+            message: "Could not find Kargo.toml in this directory or any parent".to_string(),
+        })?;
 
-    let env_vars = load_env_file(&project_root.join(".kargo.env"))
-        .map_err(KargoError::Io)?;
+    let env_vars = load_env_file(&project_root.join(".kargo.env")).map_err(KargoError::Io)?;
 
     if env_vars.is_empty() {
         println!("No environment variables configured.");
-        println!("  .kargo.env: {}", project_root.join(".kargo.env").display());
+        println!(
+            "  .kargo.env: {}",
+            project_root.join(".kargo.env").display()
+        );
         return Ok(());
     }
 

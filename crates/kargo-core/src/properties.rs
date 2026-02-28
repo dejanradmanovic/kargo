@@ -28,10 +28,7 @@ pub fn load_env_file(path: &Path) -> std::io::Result<BTreeMap<String, String>> {
 ///
 /// Looks up values first from the provided `env_overrides` map (populated
 /// from `.kargo.env`), then falls back to actual process environment variables.
-pub fn interpolate(
-    input: &str,
-    env_overrides: &BTreeMap<String, String>,
-) -> String {
+pub fn interpolate(input: &str, env_overrides: &BTreeMap<String, String>) -> String {
     let mut result = input.to_string();
     while let Some(start) = result.find("${env:") {
         let Some(end) = result[start..].find('}') else {

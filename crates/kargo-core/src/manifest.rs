@@ -259,15 +259,15 @@ impl Manifest {
         })?;
 
         let dir = path.parent().unwrap_or(Path::new("."));
-        let env_vars = crate::properties::load_env_file(&dir.join(".kargo.env"))
-            .unwrap_or_default();
+        let env_vars =
+            crate::properties::load_env_file(&dir.join(".kargo.env")).unwrap_or_default();
         let resolved = crate::properties::interpolate(&content, &env_vars);
 
-        Self::from_str(&resolved)
+        Self::parse_toml(&resolved)
     }
 
     /// Parse a `Kargo.toml` from a string (no interpolation).
-    pub fn from_str(content: &str) -> miette::Result<Self> {
+    pub fn parse_toml(content: &str) -> miette::Result<Self> {
         toml::from_str(content).map_err(|e| {
             kargo_util::errors::KargoError::Manifest {
                 message: format!("Failed to parse Kargo.toml: {e}"),

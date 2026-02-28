@@ -39,11 +39,14 @@ pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
     // 1. Kotlin compiler
-    let version: KotlinVersion = manifest.package.kotlin.parse().map_err(|e| {
-        KargoError::Toolchain {
-            message: format!("Invalid kotlin version '{}': {e}", manifest.package.kotlin),
-        }
-    })?;
+    let version: KotlinVersion =
+        manifest
+            .package
+            .kotlin
+            .parse()
+            .map_err(|e| KargoError::Toolchain {
+                message: format!("Invalid kotlin version '{}': {e}", manifest.package.kotlin),
+            })?;
 
     let toolchain = kargo_toolchain::discovery::resolve_toolchain(
         &version,
@@ -59,27 +62,25 @@ pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
         .unwrap_or("21");
     let required_major: u32 = java_target.parse().unwrap_or(21);
 
-    let jdk = sdk::discover_jdk_for_target(
-        config.toolchain.jdk.as_deref(),
-        required_major,
-    )
-    .ok_or_else(|| {
-        // Check if there's *any* JDK to give a better error message
-        let hint = match sdk::discover_jdk(config.toolchain.jdk.as_deref()) {
-            Some(found) => format!(
-                "\n  Found JDK {} at {}, but java-target requires >= {java_target}.",
-                found.version, found.home.display()
-            ),
-            None => String::new(),
-        };
-        KargoError::Toolchain {
-            message: format!(
-                "No JDK >= {java_target} found. Kotlin requires a compatible JDK.{hint}\n  \
+    let jdk = sdk::discover_jdk_for_target(config.toolchain.jdk.as_deref(), required_major)
+        .ok_or_else(|| {
+            // Check if there's *any* JDK to give a better error message
+            let hint = match sdk::discover_jdk(config.toolchain.jdk.as_deref()) {
+                Some(found) => format!(
+                    "\n  Found JDK {} at {}, but java-target requires >= {java_target}.",
+                    found.version,
+                    found.home.display()
+                ),
+                None => String::new(),
+            };
+            KargoError::Toolchain {
+                message: format!(
+                    "No JDK >= {java_target} found. Kotlin requires a compatible JDK.{hint}\n  \
                  Set JAVA_HOME, configure [toolchain].jdk in ~/.kargo/config.toml,\n  \
                  or install one with: kargo toolchain install --jdk {java_target}"
-            ),
-        }
-    })?;
+                ),
+            }
+        })?;
 
     // 3. Target-specific checks
     let has_android = manifest.targets.keys().any(|k| k == "android");
@@ -193,7 +194,7 @@ pub fn post_scaffold(project_dir: &Path) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let manifest = match Manifest::from_str(&manifest_content) {
+    let manifest = match Manifest::parse_toml(&manifest_content) {
         Ok(m) => m,
         Err(_) => return,
     };

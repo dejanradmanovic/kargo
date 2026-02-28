@@ -33,11 +33,10 @@ pub struct LockedDependencyRef {
 impl Lockfile {
     /// Load and parse a `Kargo.lock` file from the given path.
     pub fn from_path(path: &Path) -> miette::Result<Self> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            kargo_util::errors::KargoError::Generic {
+        let content =
+            std::fs::read_to_string(path).map_err(|e| kargo_util::errors::KargoError::Generic {
                 message: format!("Failed to read lockfile: {e}"),
-            }
-        })?;
+            })?;
         toml::from_str(&content).map_err(|e| {
             kargo_util::errors::KargoError::Generic {
                 message: format!("Failed to parse lockfile: {e}"),

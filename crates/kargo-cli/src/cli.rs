@@ -350,15 +350,9 @@ pub enum VariantAction {
 #[derive(Subcommand, Debug)]
 pub enum FlavorAction {
     /// Add a flavor to a dimension
-    Add {
-        dimension: String,
-        name: String,
-    },
+    Add { dimension: String, name: String },
     /// Remove a flavor
-    Remove {
-        dimension: String,
-        name: String,
-    },
+    Remove { dimension: String, name: String },
 }
 
 #[derive(Subcommand, Debug)]

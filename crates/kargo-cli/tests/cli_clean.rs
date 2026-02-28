@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+#[allow(deprecated)]
 fn kargo_cmd() -> Command {
     Command::cargo_bin("kargo").unwrap()
 }

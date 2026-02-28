@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+#[allow(deprecated)]
 fn kargo_cmd() -> Command {
     Command::cargo_bin("kargo").unwrap()
 }
@@ -58,13 +59,21 @@ fn test_new_kmp_project() {
     assert!(project_dir.join("src/jvmTest/kotlin").is_dir());
     assert!(project_dir.join("src/iosMain/kotlin").is_dir());
     assert!(project_dir.join("src/iosTest/kotlin").is_dir());
-    assert!(project_dir.join("src/commonMain/kotlin/Greeting.kt").is_file());
+    assert!(project_dir
+        .join("src/commonMain/kotlin/Greeting.kt")
+        .is_file());
 
     let manifest = fs::read_to_string(project_dir.join("Kargo.toml")).unwrap();
     assert!(manifest.contains("ios-arm64"));
     assert!(manifest.contains("ios-simulator-arm64"));
-    assert!(!manifest.contains("[compose]"), "kmp should not enable compose");
-    assert!(!manifest.contains("android"), "kmp should not include android target");
+    assert!(
+        !manifest.contains("[compose]"),
+        "kmp should not enable compose"
+    );
+    assert!(
+        !manifest.contains("android"),
+        "kmp should not include android target"
+    );
 }
 
 #[test]
@@ -114,14 +123,19 @@ fn test_new_android_project() {
     assert!(project_dir.join("src/main/res").is_dir());
     assert!(project_dir.join("src/test/kotlin").is_dir());
     assert!(project_dir.join("src/main/AndroidManifest.xml").is_file());
-    assert!(project_dir.join("src/main/kotlin/MainActivity.kt").is_file());
+    assert!(project_dir
+        .join("src/main/kotlin/MainActivity.kt")
+        .is_file());
 
     let manifest = fs::read_to_string(project_dir.join("Kargo.toml")).unwrap();
     assert!(manifest.contains("[targets.android]"));
     assert!(manifest.contains("min-sdk"));
     assert!(manifest.contains("target-sdk"));
     assert!(manifest.contains("compile-sdk"));
-    assert!(!manifest.contains("[targets.jvm]"), "android-only should not have jvm target");
+    assert!(
+        !manifest.contains("[targets.jvm]"),
+        "android-only should not have jvm target"
+    );
 }
 
 #[test]
@@ -201,7 +215,7 @@ fn test_new_manifest_is_parseable() {
 
     let manifest_content =
         fs::read_to_string(tmp.path().join(project_name).join("Kargo.toml")).unwrap();
-    let manifest = kargo_core::manifest::Manifest::from_str(&manifest_content);
+    let manifest = kargo_core::manifest::Manifest::parse_toml(&manifest_content);
     assert!(manifest.is_ok(), "Generated Kargo.toml should be parseable");
 }
 
@@ -211,11 +225,7 @@ fn test_init_creates_only_core_files() {
     let project_dir = tmp.path().join("existing-project");
     fs::create_dir(&project_dir).unwrap();
     fs::create_dir_all(project_dir.join("src/main/kotlin")).unwrap();
-    fs::write(
-        project_dir.join("src/main/kotlin/App.kt"),
-        "fun main() {}",
-    )
-    .unwrap();
+    fs::write(project_dir.join("src/main/kotlin/App.kt"), "fun main() {}").unwrap();
 
     kargo_cmd()
         .current_dir(&project_dir)
@@ -239,7 +249,10 @@ fn test_init_creates_only_core_files() {
     );
 
     let manifest = fs::read_to_string(project_dir.join("Kargo.toml")).unwrap();
-    assert!(manifest.contains("ios-arm64"), "manifest should use kmp template");
+    assert!(
+        manifest.contains("ios-arm64"),
+        "manifest should use kmp template"
+    );
 }
 
 #[test]
@@ -277,7 +290,7 @@ fn test_all_templates_produce_parseable_manifests() {
 
         let manifest_content =
             fs::read_to_string(tmp.path().join(&project_name).join("Kargo.toml")).unwrap();
-        let result = kargo_core::manifest::Manifest::from_str(&manifest_content);
+        let result = kargo_core::manifest::Manifest::parse_toml(&manifest_content);
         assert!(
             result.is_ok(),
             "Template '{}' generated unparseable Kargo.toml: {:?}",

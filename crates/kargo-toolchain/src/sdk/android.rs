@@ -83,10 +83,7 @@ pub fn has_platform(info: &AndroidSdkInfo, compile_sdk: u32) -> bool {
 /// If the platform is missing and `sdkmanager` is available, installs it
 /// automatically (accepting licenses). Returns an error only if installation
 /// fails.
-pub fn ensure_android_components(
-    info: &AndroidSdkInfo,
-    compile_sdk: u32,
-) -> miette::Result<()> {
+pub fn ensure_android_components(info: &AndroidSdkInfo, compile_sdk: u32) -> miette::Result<()> {
     let mut missing: Vec<String> = Vec::new();
 
     if !info.installed_platforms.contains(&compile_sdk) {
@@ -142,10 +139,7 @@ pub fn ensure_android_components(
 
     if !status.success() {
         return Err(KargoError::Toolchain {
-            message: format!(
-                "sdkmanager failed to install: {}",
-                missing.join(", ")
-            ),
+            message: format!("sdkmanager failed to install: {}", missing.join(", ")),
         }
         .into());
     }
@@ -155,9 +149,7 @@ pub fn ensure_android_components(
 }
 
 /// Prompt the user for Android SDK installation when it's missing.
-pub fn prompt_and_install_android_sdk(
-    compile_sdk: u32,
-) -> miette::Result<AndroidSdkInfo> {
+pub fn prompt_and_install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
     let labels = [
         "Install automatically (recommended)",
         "Show me what to do manually",
@@ -225,9 +217,7 @@ pub fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
         println!("  Accepting Android SDK licenses...");
         accept_licenses(&sdkmanager, &sdk_home);
 
-        println!(
-            "  Installing platform android-{compile_sdk}, build-tools, platform-tools..."
-        );
+        println!("  Installing platform android-{compile_sdk}, build-tools, platform-tools...");
         let status = Command::new(&sdkmanager)
             .args([
                 &format!("platforms;android-{compile_sdk}"),

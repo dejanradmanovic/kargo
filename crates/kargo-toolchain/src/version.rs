@@ -34,11 +34,10 @@ impl KotlinVersion {
             kotlin: String,
         }
 
-        let parsed: Partial = toml::from_str(&content).map_err(|e| {
-            kargo_util::errors::KargoError::Toolchain {
+        let parsed: Partial =
+            toml::from_str(&content).map_err(|e| kargo_util::errors::KargoError::Toolchain {
                 message: format!("Failed to parse {}: {e}", path.display()),
-            }
-        })?;
+            })?;
 
         Self::from_str(&parsed.package.kotlin).map_err(|e| {
             kargo_util::errors::KargoError::Toolchain {

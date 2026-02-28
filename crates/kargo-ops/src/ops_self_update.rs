@@ -71,10 +71,7 @@ pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
         .trim_start_matches('v')
         .parse()
         .map_err(|e| KargoError::Generic {
-            message: format!(
-                "Cannot parse release tag '{}': {e}",
-                release.tag_name
-            ),
+            message: format!("Cannot parse release tag '{}': {e}", release.tag_name),
         })?;
 
     if current >= latest {
@@ -134,10 +131,7 @@ pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
 // -----------------------------------------------------------------------
 
 fn fetch_latest_release() -> miette::Result<GhRelease> {
-    let url = format!(
-        "{}/repos/{}/releases/latest",
-        GITHUB_API_BASE, GITHUB_REPO
-    );
+    let url = format!("{}/repos/{}/releases/latest", GITHUB_API_BASE, GITHUB_REPO);
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("kargo-self-update")
@@ -162,10 +156,7 @@ fn fetch_latest_release() -> miette::Result<GhRelease> {
 
     if !resp.status().is_success() {
         return Err(KargoError::Network {
-            message: format!(
-                "GitHub API returned HTTP {} for {url}",
-                resp.status()
-            ),
+            message: format!("GitHub API returned HTTP {} for {url}", resp.status()),
         }
         .into());
     }
@@ -216,10 +207,7 @@ fn platform_asset_name() -> Option<String> {
 
 /// Extract the `kargo` binary from the downloaded archive.
 fn extract_binary(archive: &Path, dest_dir: &Path) -> miette::Result<PathBuf> {
-    let name = archive
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
 
     if name.ends_with(".zip") {
         extract_binary_from_zip(archive, dest_dir)
@@ -228,10 +216,7 @@ fn extract_binary(archive: &Path, dest_dir: &Path) -> miette::Result<PathBuf> {
     }
 }
 
-fn extract_binary_from_tarball(
-    archive: &Path,
-    dest_dir: &Path,
-) -> miette::Result<PathBuf> {
+fn extract_binary_from_tarball(archive: &Path, dest_dir: &Path) -> miette::Result<PathBuf> {
     let status = std::process::Command::new("tar")
         .args(["xzf", &archive.to_string_lossy(), "-C"])
         .arg(dest_dir)
@@ -250,10 +235,7 @@ fn extract_binary_from_tarball(
     find_kargo_binary(dest_dir)
 }
 
-fn extract_binary_from_zip(
-    archive: &Path,
-    dest_dir: &Path,
-) -> miette::Result<PathBuf> {
+fn extract_binary_from_zip(archive: &Path, dest_dir: &Path) -> miette::Result<PathBuf> {
     let file = fs::File::open(archive).map_err(KargoError::Io)?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| KargoError::Toolchain {
         message: format!("Failed to open zip: {e}"),
@@ -317,10 +299,7 @@ fn ls_dir(dir: &Path) -> String {
     fs::read_dir(dir)
         .into_iter()
         .flatten()
-        .filter_map(|e| {
-            e.ok()
-                .map(|e| e.file_name().to_string_lossy().to_string())
-        })
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
         .collect::<Vec<_>>()
         .join(", ")
 }

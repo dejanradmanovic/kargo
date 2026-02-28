@@ -47,7 +47,7 @@ path = "src"
 path = "hello.txt"
 content = "Hello {{project_name}}"
 "##;
-    let tmpl = ProjectTemplate::from_str(toml).unwrap();
+    let tmpl = ProjectTemplate::parse_toml(toml).unwrap();
     assert_eq!(tmpl.template.name, "test");
     assert_eq!(tmpl.directories.len(), 1);
     assert_eq!(tmpl.files.len(), 1);
@@ -55,7 +55,7 @@ content = "Hello {{project_name}}"
 
 #[test]
 fn test_template_from_str_invalid() {
-    let result = ProjectTemplate::from_str("not valid toml {{");
+    let result = ProjectTemplate::parse_toml("not valid toml {{");
     assert!(result.is_err());
 }
 
@@ -84,7 +84,7 @@ path = "src/main/Hello.kt"
 content = "fun main() = println(\"{{project_name}}\")"
 "##;
 
-    let tmpl = ProjectTemplate::from_str(toml).unwrap();
+    let tmpl = ProjectTemplate::parse_toml(toml).unwrap();
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().join("my-project");
     std::fs::create_dir(&root).unwrap();
@@ -128,7 +128,7 @@ path = "src/main/kotlin"
 path = "src/main/kotlin/Main.kt"
 content = "fun main() {}"
 "##;
-    let tmpl = ProjectTemplate::from_str(toml).unwrap();
+    let tmpl = ProjectTemplate::parse_toml(toml).unwrap();
     let tmp = TempDir::new().unwrap();
 
     std::fs::write(tmp.path().join("Kargo.toml"), "original manifest").unwrap();
@@ -137,14 +137,32 @@ content = "fun main() {}"
     tmpl.render_core_only(tmp.path(), &ctx).unwrap();
 
     let manifest = std::fs::read_to_string(tmp.path().join("Kargo.toml")).unwrap();
-    assert_eq!(manifest, "original manifest", "existing Kargo.toml should not be overwritten");
+    assert_eq!(
+        manifest, "original manifest",
+        "existing Kargo.toml should not be overwritten"
+    );
 
-    assert!(tmp.path().join("Kargo.lock").is_file(), "Kargo.lock should be created");
-    assert!(tmp.path().join(".gitignore").is_file(), ".gitignore should be created");
-    assert!(tmp.path().join(".kargo.env").is_file(), ".kargo.env should be created");
+    assert!(
+        tmp.path().join("Kargo.lock").is_file(),
+        "Kargo.lock should be created"
+    );
+    assert!(
+        tmp.path().join(".gitignore").is_file(),
+        ".gitignore should be created"
+    );
+    assert!(
+        tmp.path().join(".kargo.env").is_file(),
+        ".kargo.env should be created"
+    );
 
-    assert!(!tmp.path().join("src/main/kotlin").exists(), "render_core_only must not create src dirs");
-    assert!(!tmp.path().join("src/main/kotlin/Main.kt").exists(), "render_core_only must not create src files");
+    assert!(
+        !tmp.path().join("src/main/kotlin").exists(),
+        "render_core_only must not create src dirs"
+    );
+    assert!(
+        !tmp.path().join("src/main/kotlin/Main.kt").exists(),
+        "render_core_only must not create src files"
+    );
 }
 
 #[test]

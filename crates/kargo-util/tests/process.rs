@@ -2,10 +2,7 @@ use kargo_util::process::CommandBuilder;
 
 #[test]
 fn test_builder_simple_command() {
-    let output = CommandBuilder::new("echo")
-        .arg("hello")
-        .exec()
-        .unwrap();
+    let output = CommandBuilder::new("echo").arg("hello").exec().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "hello");

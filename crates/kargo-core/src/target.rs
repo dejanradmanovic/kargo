@@ -64,7 +64,7 @@ pub enum KotlinTarget {
 
 impl KotlinTarget {
     /// Parse a target name (kebab-case or camelCase) into a `KotlinTarget`.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "jvm" => Some(Self::Jvm),
             "android" => Some(Self::Android),
