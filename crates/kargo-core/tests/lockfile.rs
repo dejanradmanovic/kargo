@@ -9,6 +9,8 @@ fn round_trip_serialize_deserialize() {
             version: "1.9.0".to_string(),
             checksum: Some("abc123".to_string()),
             source: Some("maven".to_string()),
+            scope: None,
+            targets: vec![],
             dependencies: vec![LockedDependencyRef {
                 name: "annotations".to_string(),
                 group: "org.jetbrains".to_string(),

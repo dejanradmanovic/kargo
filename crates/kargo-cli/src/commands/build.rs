@@ -12,6 +12,8 @@ pub fn exec(target: Option<&str>, profile: Option<&str>, verbose: bool) -> Resul
         println!();
     }
 
+    kargo_ops::ops_setup::ensure_lockfile(&cwd)?;
+
     eprintln!(
         "kargo build is not yet implemented (Kotlin {} ready, JDK {} available)",
         result.toolchain.version, result.jdk.version

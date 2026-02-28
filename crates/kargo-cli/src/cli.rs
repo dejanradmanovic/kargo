@@ -140,10 +140,29 @@ pub enum Command {
     Remove {
         /// Dependency name
         dep: String,
+        /// Remove from dev dependencies
+        #[arg(long)]
+        dev: bool,
+        /// Remove from a specific target
+        #[arg(long)]
+        target: Option<String>,
+        /// Remove from a specific flavor
+        #[arg(long)]
+        flavor: Option<String>,
     },
 
-    /// Update dependencies
-    Update,
+    /// Update dependencies to latest compatible versions
+    Update {
+        /// Allow major version bumps
+        #[arg(long)]
+        major: bool,
+        /// Update a specific dependency only
+        #[arg(long)]
+        dep: Option<String>,
+        /// Show what would be updated without changing files
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// Download dependencies without building
     Fetch,
@@ -180,8 +199,12 @@ pub enum Command {
         major: bool,
     },
 
-    /// Scan dependencies for vulnerabilities
-    Audit,
+    /// Scan dependencies for known vulnerabilities (OSV database)
+    Audit {
+        /// Minimum severity to fail on: low, moderate, high, critical
+        #[arg(long)]
+        fail_on: Option<String>,
+    },
 
     /// Run the linter
     Lint {
@@ -233,9 +256,6 @@ pub enum Command {
         #[arg(long)]
         ios_universal: bool,
     },
-
-    /// Authenticate with a registry
-    Login,
 
     /// Launch Kotlin REPL
     Repl,

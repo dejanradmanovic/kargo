@@ -1,12 +1,20 @@
 //! Command dispatch and handler modules.
 
+mod add;
+mod audit;
 mod build;
 mod clean;
 mod env;
+mod fetch;
 mod init;
+mod lock;
 mod new;
+mod outdated;
+mod remove;
 mod self_;
 mod toolchain;
+mod tree;
+mod update;
 
 use miette::Result;
 
@@ -24,6 +32,35 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Command::Build {
             target, profile, ..
         } => build::exec(target.as_deref(), profile.as_deref(), cli.verbose),
+        Command::Add {
+            dep,
+            dev,
+            target,
+            flavor,
+        } => add::exec(&dep, dev, target.as_deref(), flavor.as_deref()),
+        Command::Remove {
+            dep,
+            dev,
+            target,
+            flavor,
+        } => remove::exec(&dep, dev, target.as_deref(), flavor.as_deref()),
+        Command::Fetch => fetch::exec(cli.verbose),
+        Command::Lock => lock::exec(cli.verbose),
+        Command::Tree {
+            depth,
+            duplicates,
+            inverted,
+            why,
+            conflicts,
+            licenses,
+        } => tree::exec(depth, duplicates, inverted, why, conflicts, licenses),
+        Command::Outdated { major } => outdated::exec(major),
+        Command::Update {
+            major,
+            dep,
+            dry_run,
+        } => update::exec(major, dep, dry_run),
+        Command::Audit { fail_on } => audit::exec(fail_on),
         _ => {
             eprintln!("This command is not yet implemented");
             Ok(())

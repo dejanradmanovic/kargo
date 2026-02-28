@@ -1029,6 +1029,7 @@ dependencies = [
  "predicates",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1085,6 +1086,7 @@ dependencies = [
 name = "kargo-maven"
 version = "0.1.0"
 dependencies = [
+ "indicatif",
  "kargo-core",
  "kargo-util",
  "md-5",
@@ -1094,6 +1096,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
@@ -1105,6 +1108,7 @@ dependencies = [
 name = "kargo-ops"
 version = "0.1.0"
 dependencies = [
+ "indicatif",
  "kargo-compiler",
  "kargo-core",
  "kargo-lint",
@@ -1121,6 +1125,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
+ "toml_edit",
  "tracing",
  "zip",
 ]
@@ -1148,6 +1154,7 @@ dependencies = [
  "kargo-util",
  "miette",
  "petgraph",
+ "reqwest",
  "semver",
  "serde",
  "thiserror 2.0.18",

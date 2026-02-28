@@ -248,7 +248,7 @@ graph LR
 |-------|-------|---------|
 | 1. Foundation | Core types, manifest parsing, CLI scaffold, templates, `new`/`init`/`clean`/`env` | Done    |
 | 2. Toolchain | Kotlin compiler auto-download, JDK/SDK discovery | Done    |
-| 3. Maven + Resolution | POM parsing, dependency resolution, lockfile, `add`/`tree`/`outdated` | Planned |
+| 3. Maven + Resolution | POM parsing, dependency resolution, lockfile, `add`/`tree`/`outdated` | Done    |
 | 4. Compilation | kotlinc invocation, incremental builds, build cache | Planned |
 | 5. KMP + CMP + Flavors | Multi-target builds, Compose plugin, source set hierarchy, flavors | Planned |
 | 6. Code Quality | Linter, formatter, test coverage, benchmarks | Planned |

@@ -202,6 +202,8 @@ pub fn post_scaffold(project_dir: &Path) {
     setup_jdk(&config, &manifest);
     setup_target_sdks(&manifest);
 
+    resolve_lockfile(project_dir);
+
     println!();
     println!("  Ready to build!");
 }
@@ -341,4 +343,68 @@ fn setup_target_sdks(manifest: &Manifest) {
             }
         }
     }
+}
+
+/// Resolve dependencies and generate `Kargo.lock` after scaffolding.
+///
+/// Best-effort: errors are printed as warnings but never block project creation.
+fn resolve_lockfile(project_dir: &Path) {
+    let manifest_path = project_dir.join("Kargo.toml");
+    let manifest = match Manifest::from_path(&manifest_path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    if manifest.dependencies.is_empty() && manifest.dev_dependencies.is_empty() {
+        return;
+    }
+
+    println!("  Resolving dependencies...");
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            println!("  Warning: could not start async runtime: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = rt.block_on(crate::ops_fetch::fetch(project_dir, false)) {
+        println!("  Warning: failed to resolve dependencies: {e}");
+    }
+}
+
+/// Ensure the lockfile is present and up-to-date before building.
+///
+/// Called during `preflight`. If the lockfile is missing or stale, triggers
+/// a fresh resolution. Skips silently when no dependencies are declared.
+pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
+    let manifest_path = project_dir.join("Kargo.toml");
+    let manifest = Manifest::from_path(&manifest_path)?;
+
+    if manifest.dependencies.is_empty() && manifest.dev_dependencies.is_empty() {
+        return Ok(());
+    }
+
+    let lockfile_path = project_dir.join("Kargo.lock");
+    let needs_resolve = if lockfile_path.is_file() {
+        match kargo_core::lockfile::Lockfile::from_path(&lockfile_path) {
+            Ok(lf) => {
+                let declared = crate::ops_fetch::collect_declared_deps(&manifest);
+                !lf.is_up_to_date(&declared)
+            }
+            Err(_) => true,
+        }
+    } else {
+        true
+    };
+
+    if needs_resolve {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
+            message: format!("Failed to start async runtime: {e}"),
+        })?;
+        rt.block_on(crate::ops_fetch::fetch(project_dir, false))?;
+    }
+
+    Ok(())
 }
