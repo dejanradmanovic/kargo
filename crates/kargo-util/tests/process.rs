@@ -36,30 +36,28 @@ fn test_builder_with_env() {
 fn test_builder_with_cwd() {
     let tmp = tempfile::TempDir::new().unwrap();
 
+    // Write a marker file and verify the command can see it from the cwd.
+    // This avoids path comparison issues on Windows (8.3 short names, UNC prefixes).
+    let marker = tmp.path().join("kargo_cwd_test.marker");
+    std::fs::write(&marker, "ok").unwrap();
+
     #[cfg(unix)]
-    let output = CommandBuilder::new("pwd")
+    let output = CommandBuilder::new("ls")
+        .arg("kargo_cwd_test.marker")
         .cwd(tmp.path().to_str().unwrap())
         .exec()
         .unwrap();
 
     #[cfg(windows)]
     let output = CommandBuilder::new("cmd")
-        .args(["/C", "cd"])
+        .args(["/C", "dir", "/b", "kargo_cwd_test.marker"])
         .cwd(tmp.path().to_str().unwrap())
         .exec()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let actual = std::path::PathBuf::from(stdout.trim());
-    let expected = tmp.path().canonicalize().unwrap();
-
-    // Compare using dunce-style stripping: on Windows canonicalize() produces
-    // UNC paths (\\?\C:\...) while `cd` returns plain paths (C:\...).
-    assert_eq!(
-        actual.components().collect::<Vec<_>>(),
-        expected.components().collect::<Vec<_>>()
-    );
+    assert!(stdout.trim().contains("kargo_cwd_test.marker"));
 }
 
 #[test]

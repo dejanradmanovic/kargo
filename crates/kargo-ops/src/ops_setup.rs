@@ -377,7 +377,8 @@ fn resolve_lockfile(project_dir: &Path) {
 /// Ensure the lockfile is present and up-to-date before building.
 ///
 /// Called during `preflight`. If the lockfile is missing or stale, triggers
-/// a fresh resolution. Skips silently when no dependencies are declared.
+/// a fresh resolution. Also verifies cached JAR checksums against the lockfile
+/// to detect corruption or tampering.
 pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
     let manifest_path = project_dir.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
@@ -404,6 +405,57 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
             message: format!("Failed to start async runtime: {e}"),
         })?;
         rt.block_on(crate::ops_fetch::fetch(project_dir, false))?;
+    }
+
+    // Verify cached JAR checksums against the lockfile
+    if let Ok(lf) = kargo_core::lockfile::Lockfile::from_path(&lockfile_path) {
+        verify_cached_checksums(project_dir, &lf)?;
+    }
+
+    Ok(())
+}
+
+/// Verify that cached JARs match the checksums recorded in `Kargo.lock`.
+///
+/// Skips entries without a recorded checksum or without a cached JAR.
+fn verify_cached_checksums(
+    project_dir: &Path,
+    lockfile: &kargo_core::lockfile::Lockfile,
+) -> miette::Result<()> {
+    let cache = kargo_maven::cache::LocalCache::new(project_dir);
+
+    for pkg in &lockfile.package {
+        let expected = match &pkg.checksum {
+            Some(c) if !c.is_empty() => c,
+            _ => continue,
+        };
+
+        let jar_path = match cache.get_jar(&pkg.group, &pkg.name, &pkg.version, None) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let data = std::fs::read(&jar_path).map_err(|e| KargoError::Generic {
+            message: format!(
+                "Failed to read cached JAR {}:{}:{}: {e}",
+                pkg.group, pkg.name, pkg.version
+            ),
+        })?;
+
+        let actual = kargo_util::hash::sha256_bytes(&data);
+        if actual != *expected {
+            return Err(KargoError::Generic {
+                message: format!(
+                    "Checksum mismatch for {}:{}:{}\n  \
+                     expected: {expected}\n  \
+                     actual:   {actual}\n\
+                     The cached JAR may be corrupted. \
+                     Run `kargo fetch` to re-download.",
+                    pkg.group, pkg.name, pkg.version
+                ),
+            }
+            .into());
+        }
     }
 
     Ok(())

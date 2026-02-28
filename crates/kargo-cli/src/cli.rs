@@ -165,7 +165,11 @@ pub enum Command {
     },
 
     /// Download dependencies without building
-    Fetch,
+    Fetch {
+        /// Re-verify checksums of cached artifacts against the lockfile
+        #[arg(long)]
+        verify: bool,
+    },
 
     /// Regenerate the lockfile
     Lock,

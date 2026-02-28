@@ -109,6 +109,71 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     Ok(())
 }
 
+/// Verify that all cached JARs match their lockfile checksums.
+///
+/// Reports all mismatches at once rather than failing on the first one.
+pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
+    let lockfile_path = project_root.join("Kargo.lock");
+    let lockfile = Lockfile::from_path(&lockfile_path)?;
+    let cache = LocalCache::new(project_root);
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut verified = 0u32;
+    let mut skipped = 0u32;
+
+    for pkg in &lockfile.package {
+        let expected = match &pkg.checksum {
+            Some(c) if !c.is_empty() => c,
+            _ => {
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let jar_path = match cache.get_jar(&pkg.group, &pkg.name, &pkg.version, None) {
+            Some(p) => p,
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let data =
+            std::fs::read(&jar_path).map_err(|e| kargo_util::errors::KargoError::Generic {
+                message: format!(
+                    "Failed to read cached JAR {}:{}:{}: {e}",
+                    pkg.group, pkg.name, pkg.version
+                ),
+            })?;
+
+        let actual = sha256_bytes(&data);
+        if actual == *expected {
+            verified += 1;
+        } else {
+            mismatches.push(format!(
+                "{}:{}:{}\n  expected: {expected}\n  actual:   {actual}",
+                pkg.group, pkg.name, pkg.version
+            ));
+        }
+    }
+
+    if mismatches.is_empty() {
+        eprintln!(
+            "Verified {verified} checksums ({skipped} skipped, no cached JAR or no checksum)"
+        );
+        Ok(())
+    } else {
+        let count = mismatches.len();
+        let details = mismatches.join("\n");
+        Err(kargo_util::errors::KargoError::Generic {
+            message: format!(
+                "{count} checksum mismatch(es) detected:\n{details}\n\n\
+                 Cached JARs may be corrupted. Delete .kargo/cache and run `kargo fetch`."
+            ),
+        }
+        .into())
+    }
+}
+
 /// Collect `(group, artifact, version)` from all direct dependency sections.
 pub fn collect_declared_deps(manifest: &Manifest) -> Vec<(String, String, String)> {
     use kargo_core::dependency::{Dependency, MavenCoordinate};

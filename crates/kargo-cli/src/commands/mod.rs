@@ -44,7 +44,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             target,
             flavor,
         } => remove::exec(&dep, dev, target.as_deref(), flavor.as_deref()),
-        Command::Fetch => fetch::exec(cli.verbose),
+        Command::Fetch { verify } => fetch::exec(cli.verbose, verify),
         Command::Lock => lock::exec(cli.verbose),
         Command::Tree {
             depth,
