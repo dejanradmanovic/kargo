@@ -33,5 +33,8 @@ pub fn exec(template: &str) -> Result<()> {
     tmpl.render_core_only(&cwd, &ctx)?;
 
     println!("Initialized Kargo project in {}", cwd.display());
+
+    kargo_ops::ops_setup::post_scaffold(&cwd);
+
     Ok(())
 }

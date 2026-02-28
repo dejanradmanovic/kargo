@@ -5,4 +5,8 @@ pub mod ops_fetch;
 pub mod ops_init;
 pub mod ops_new;
 pub mod ops_run;
+pub mod ops_self;
+pub mod ops_self_update;
+pub mod ops_setup;
 pub mod ops_test;
+pub mod ops_toolchain;

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Global user configuration loaded from `~/.kargo/config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -155,14 +155,12 @@ impl GlobalConfig {
 
     /// Returns the default path to the global config file.
     pub fn default_path() -> PathBuf {
-        dirs_path().join("config.toml")
+        kargo_util::dirs_path().join("config.toml")
     }
 }
 
 /// Returns the path to the Kargo data directory (`~/.kargo/`).
+/// Re-exported from `kargo_util` for backward compatibility.
 pub fn dirs_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".kargo")
+    kargo_util::dirs_path()
 }

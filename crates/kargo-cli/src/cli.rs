@@ -363,12 +363,30 @@ pub enum FlavorAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ToolchainAction {
-    /// Download and install a Kotlin version
-    Install { version: String },
+    /// Download and install a Kotlin version (and optionally a JDK or Android SDK)
+    Install {
+        /// Kotlin version to install (e.g., 2.3.0)
+        version: Option<String>,
+        /// Install a JDK, optionally specifying the major version (e.g., --jdk 17)
+        #[arg(long, num_args = 0..=1, default_missing_value = "21")]
+        jdk: Option<String>,
+        /// Install the Android SDK, optionally specifying the compile-sdk level (e.g., --android 34)
+        #[arg(long, num_args = 0..=1, default_missing_value = "35")]
+        android: Option<String>,
+    },
     /// List installed toolchains
     List,
-    /// Remove a cached toolchain
-    Remove { version: String },
+    /// Remove a cached toolchain, JDK, or Android SDK
+    Remove {
+        /// Kotlin version to remove (e.g., 2.3.0)
+        version: Option<String>,
+        /// Remove a managed JDK by major version (e.g., --jdk 21)
+        #[arg(long)]
+        jdk: Option<String>,
+        /// Remove the managed Android SDK
+        #[arg(long)]
+        android: bool,
+    },
     /// Set default Kotlin version
     Use { version: String },
     /// Print path to active toolchain
@@ -378,7 +396,11 @@ pub enum ToolchainAction {
 #[derive(Subcommand, Debug)]
 pub enum SelfAction {
     /// Update Kargo to the latest version
-    Update,
+    Update {
+        /// Only check for updates, don't install
+        #[arg(long)]
+        check: bool,
+    },
     /// Show version, config paths, cache size
     Info,
     /// Clean global caches

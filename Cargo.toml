@@ -71,6 +71,12 @@ globset = "0.4"
 # Temp files
 tempfile = "3"
 
+# Archive extraction
+zip = "2"
+
+# Terminal detection
+atty = "0.2"
+
 # Plugin scripting
 rhai = "1"
 

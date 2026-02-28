@@ -244,10 +244,10 @@ graph LR
 
 ## Roadmap
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 1. Foundation | Core types, manifest parsing, CLI scaffold, templates, `new`/`init`/`clean`/`env` | Done |
-| 2. Toolchain | Kotlin compiler auto-download, JDK/SDK discovery | Planned |
+| Phase | Scope | Status  |
+|-------|-------|---------|
+| 1. Foundation | Core types, manifest parsing, CLI scaffold, templates, `new`/`init`/`clean`/`env` | Done    |
+| 2. Toolchain | Kotlin compiler auto-download, JDK/SDK discovery | Done    |
 | 3. Maven + Resolution | POM parsing, dependency resolution, lockfile, `add`/`tree`/`outdated` | Planned |
 | 4. Compilation | kotlinc invocation, incremental builds, build cache | Planned |
 | 5. KMP + CMP + Flavors | Multi-target builds, Compose plugin, source set hierarchy, flavors | Planned |

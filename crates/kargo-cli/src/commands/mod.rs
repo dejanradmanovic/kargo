@@ -5,6 +5,8 @@ mod clean;
 mod env;
 mod init;
 mod new;
+mod self_;
+mod toolchain;
 
 use miette::Result;
 
@@ -17,10 +19,11 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Command::Init { template } => init::exec(&template),
         Command::Clean { variant } => clean::exec(variant.as_deref()),
         Command::Env { reveal } => env::exec(reveal),
-        Command::Build { .. } => {
-            eprintln!("kargo build is not yet implemented");
-            Ok(())
-        }
+        Command::Toolchain { action } => toolchain::exec(action),
+        Command::SelfCmd { action } => self_::exec(action),
+        Command::Build {
+            target, profile, ..
+        } => build::exec(target.as_deref(), profile.as_deref(), cli.verbose),
         _ => {
             eprintln!("This command is not yet implemented");
             Ok(())

@@ -32,5 +32,8 @@ pub fn exec(name: &str, template: &str) -> Result<()> {
         "Created new Kargo project '{}' with template '{}'",
         name, template
     );
+
+    kargo_ops::ops_setup::post_scaffold(project_dir);
+
     Ok(())
 }

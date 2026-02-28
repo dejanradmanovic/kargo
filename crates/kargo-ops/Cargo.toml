@@ -21,3 +21,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 miette.workspace = true
 tracing.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+semver.workspace = true
+zip.workspace = true
+tempfile.workspace = true
