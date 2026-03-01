@@ -126,11 +126,11 @@ pub fn cmd_clean() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
+pub async fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
     println!("  Kargo {pkg_version} (current)");
     println!("  Checking for updates...");
 
-    match ops_self_update::check_for_update(pkg_version)? {
+    match ops_self_update::check_for_update(pkg_version).await? {
         UpdateCheck::UpToDate(v) => {
             println!("  Already up to date (v{v}).");
         }
@@ -143,7 +143,7 @@ pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
                 return Ok(());
             }
 
-            ops_self_update::apply_update(&info)?;
+            ops_self_update::apply_update(&info).await?;
             println!();
             println!("  Restart your shell or run `kargo --version` to verify.");
         }

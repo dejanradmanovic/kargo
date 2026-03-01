@@ -32,8 +32,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Init { template } => init::exec(&template).await,
         Command::Clean { variant } => clean::exec(variant.as_deref()),
         Command::Env { reveal } => env::exec(reveal),
-        Command::Toolchain { action } => toolchain::exec(action),
-        Command::SelfCmd { action } => self_::exec(action),
+        Command::Toolchain { action } => toolchain::exec(action).await,
+        Command::SelfCmd { action } => self_::exec(action).await,
         Command::Build {
             target,
             profile,
@@ -57,7 +57,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             test_::exec(target.as_deref(), filter.as_deref(), cli.verbose).await
         }
         Command::Check { .. } => check::exec(cli.verbose).await,
-        Command::Cache { action } => cache::exec(action),
+        Command::Cache { action } => cache::exec(action).await,
         Command::Add {
             dep,
             dev,

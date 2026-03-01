@@ -33,7 +33,7 @@ pub struct PreflightResult {
 /// critical is missing. It will auto-download the Kotlin compiler if
 /// `auto_download` is enabled in the global config, but will not interactively
 /// prompt the user for JDK/SDK installation — those must already be present.
-pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
+pub async fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
     let manifest = load_manifest(project_dir)?;
     let config = match GlobalConfig::load() {
         Ok(c) => c,
@@ -58,7 +58,8 @@ pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
         &version,
         config.toolchain.auto_download,
         mirror,
-    )?;
+    )
+    .await?;
 
     // 2. JDK (always required for Kotlin compilation)
     let java_target = manifest
@@ -200,7 +201,7 @@ pub async fn post_scaffold(project_dir: &Path) {
     };
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
-    setup_kotlin(&manifest_path, &config, mirror);
+    setup_kotlin(&manifest_path, &config, mirror).await;
 
     let manifest_content = match std::fs::read_to_string(&manifest_path) {
         Ok(c) => c,
@@ -211,8 +212,8 @@ pub async fn post_scaffold(project_dir: &Path) {
         Err(_) => return,
     };
 
-    setup_jdk(&config, &manifest);
-    setup_target_sdks(&manifest);
+    setup_jdk(&config, &manifest).await;
+    setup_target_sdks(&manifest).await;
 
     resolve_lockfile(project_dir).await;
 
@@ -234,7 +235,7 @@ fn load_manifest(project_dir: &Path) -> miette::Result<Manifest> {
     Manifest::from_path(&manifest_path)
 }
 
-fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str>) {
+async fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str>) {
     let version = match KotlinVersion::from_manifest(manifest_path) {
         Ok(v) => v,
         Err(e) => {
@@ -246,7 +247,7 @@ fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str
     if install::is_installed(&version) {
         println!("  Kotlin {} already installed.", version);
     } else if config.toolchain.auto_download {
-        match install::install_kotlin(&version, mirror) {
+        match install::install_kotlin(&version, mirror).await {
             Ok(_) => {}
             Err(e) => {
                 println!("  Warning: failed to install Kotlin {version}: {e}");
@@ -264,7 +265,7 @@ fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str
     }
 }
 
-fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
+async fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
     let java_target = manifest
         .targets
         .values()
@@ -288,7 +289,7 @@ fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
                     found.version
                 );
             }
-            match sdk::prompt_and_install_jdk(java_target) {
+            match sdk::prompt_and_install_jdk(java_target).await {
                 Ok(jdk) => {
                     println!("  JDK {} ready.", jdk.version);
                 }
@@ -303,7 +304,7 @@ fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
     }
 }
 
-fn setup_target_sdks(manifest: &Manifest) {
+async fn setup_target_sdks(manifest: &Manifest) {
     let has_android = manifest.targets.keys().any(|k| k == "android");
     let has_ios = manifest
         .targets
@@ -329,7 +330,7 @@ fn setup_target_sdks(manifest: &Manifest) {
                     }
                 }
             }
-            None => match sdk::prompt_and_install_android_sdk(compile_sdk) {
+            None => match sdk::prompt_and_install_android_sdk(compile_sdk).await {
                 Ok(android) => {
                     println!("  Android SDK ready at {}", android.home.display());
                 }

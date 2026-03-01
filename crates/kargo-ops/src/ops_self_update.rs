@@ -57,7 +57,7 @@ pub enum UpdateCheck {
 // -----------------------------------------------------------------------
 
 /// Query GitHub Releases for the latest version and compare with `current`.
-pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
+pub async fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
     let current: Version = current_version
         .trim_start_matches('v')
         .parse()
@@ -65,7 +65,7 @@ pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
             message: format!("Cannot parse current version '{current_version}': {e}"),
         })?;
 
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release().await?;
     let latest: Version = release
         .tag_name
         .trim_start_matches('v')
@@ -109,20 +109,19 @@ pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
 }
 
 /// Download and install the update, replacing the currently running binary.
-pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
+pub async fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
     let current_exe = std::env::current_exe().map_err(KargoError::Io)?;
 
     let tmp_dir = tempfile::tempdir().map_err(KargoError::Io)?;
     let archive_path = tmp_dir.path().join(&info.asset_name);
 
     println!("  Downloading Kargo {}...", info.latest);
-    kargo_toolchain::download::download_file(&info.asset_url, &archive_path)?;
+    kargo_toolchain::download::download_file(&info.asset_url, &archive_path).await?;
 
-    // Verify download checksum
     let checksum_url = format!("{}.sha256", info.asset_url);
-    match reqwest::blocking::get(&checksum_url) {
+    match reqwest::get(&checksum_url).await {
         Ok(resp) if resp.status().is_success() => {
-            if let Ok(expected) = resp.text() {
+            if let Ok(expected) = resp.text().await {
                 let expected = expected.split_whitespace().next().unwrap_or("").to_string();
                 if !expected.is_empty() {
                     let actual = kargo_util::hash::sha256_file(&archive_path)?;
@@ -154,19 +153,23 @@ pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
 // Internals
 // -----------------------------------------------------------------------
 
-fn fetch_latest_release() -> miette::Result<GhRelease> {
+async fn fetch_latest_release() -> miette::Result<GhRelease> {
     let url = format!("{}/repos/{}/releases/latest", GITHUB_API_BASE, GITHUB_REPO);
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent("kargo-self-update")
         .build()
         .map_err(|e| KargoError::Network {
             message: format!("HTTP client error: {e}"),
         })?;
 
-    let resp = client.get(&url).send().map_err(|e| KargoError::Network {
-        message: format!("Failed to reach GitHub: {e}"),
-    })?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| KargoError::Network {
+            message: format!("Failed to reach GitHub: {e}"),
+        })?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(KargoError::Network {
@@ -185,7 +188,7 @@ fn fetch_latest_release() -> miette::Result<GhRelease> {
         .into());
     }
 
-    resp.json::<GhRelease>().map_err(|e| {
+    resp.json::<GhRelease>().await.map_err(|e| {
         KargoError::Network {
             message: format!("Failed to parse GitHub release JSON: {e}"),
         }

@@ -59,7 +59,7 @@ impl BuildContext {
         profile: Option<&str>,
         release: bool,
     ) -> miette::Result<Self> {
-        let preflight = crate::ops_setup::preflight(project_dir)?;
+        let preflight = crate::ops_setup::preflight(project_dir).await?;
         crate::ops_setup::ensure_lockfile(project_dir).await?;
 
         let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;

@@ -79,9 +79,9 @@ pub fn clean() -> miette::Result<()> {
 }
 
 /// Stop the Kotlin compiler daemon (if any).
-pub fn stop_daemon() -> miette::Result<()> {
+pub async fn stop_daemon() -> miette::Result<()> {
     let cwd = std::env::current_dir().map_err(KargoError::Io)?;
-    let preflight = crate::ops_setup::preflight(&cwd);
+    let preflight = crate::ops_setup::preflight(&cwd).await;
 
     let kotlinc = match preflight {
         Ok(ref pf) => pf.toolchain.kotlinc.clone(),

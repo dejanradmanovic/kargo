@@ -34,7 +34,8 @@ clap = { version = "4", features = ["derive", "env", "string"] }
 tokio = { version = "1", features = ["full"] }
 
 # HTTP
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+futures-util = "0.3"
 
 # XML parsing (POM files)
 quick-xml = { version = "0.37", features = ["serialize"] }
