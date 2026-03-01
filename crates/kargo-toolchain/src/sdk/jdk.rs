@@ -224,7 +224,7 @@ fn common_jdk_paths() -> Vec<PathBuf> {
 }
 
 /// Prompt the user to choose a JDK distribution and install it.
-pub fn prompt_and_install_jdk(java_target: &str) -> miette::Result<JdkInfo> {
+pub async fn prompt_and_install_jdk(java_target: &str) -> miette::Result<JdkInfo> {
     let distributions = [
         JdkDistribution::Temurin,
         JdkDistribution::Corretto,
@@ -254,11 +254,14 @@ pub fn prompt_and_install_jdk(java_target: &str) -> miette::Result<JdkInfo> {
     };
 
     let dist = distributions[selection];
-    install_jdk(java_target, dist)
+    install_jdk(java_target, dist).await
 }
 
 /// Download and install a JDK into `~/.kargo/jdks/<dist>-<version>/`.
-pub fn install_jdk(java_version: &str, distribution: JdkDistribution) -> miette::Result<JdkInfo> {
+pub async fn install_jdk(
+    java_version: &str,
+    distribution: JdkDistribution,
+) -> miette::Result<JdkInfo> {
     let dir_name = format!(
         "{}-{}",
         match distribution {
@@ -288,7 +291,7 @@ pub fn install_jdk(java_version: &str, distribution: JdkDistribution) -> miette:
     };
     let archive_path = tmp_dir.path().join(archive_name);
 
-    download::download_file(&url, &archive_path)?;
+    download::download_file(&url, &archive_path).await?;
 
     kargo_util::fs::ensure_dir(&jdks_dir()).map_err(KargoError::Io)?;
 
@@ -469,7 +472,12 @@ fn flatten_jdk_dir(dir: &Path) -> miette::Result<()> {
                 }
             })
             .map_err(KargoError::Io)?;
-            let _ = fs::remove_dir_all(&tmp);
+            if let Err(e) = fs::remove_dir_all(&tmp) {
+                tracing::warn!(
+                    "Failed to remove temporary JDK flatten directory {}: {e}",
+                    tmp.display()
+                );
+            }
         }
     }
     Ok(())

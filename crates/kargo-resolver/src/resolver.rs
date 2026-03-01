@@ -179,9 +179,15 @@ pub async fn resolve(
                 join_set.spawn(async move {
                     let _permit = sem.acquire().await;
                     let local_cache = LocalCache::from_root(cache_root);
-                    let result =
-                        fetch_pom_from_repos(&client, &repos, &local_cache, &group, &artifact, &version)
-                            .await;
+                    let result = fetch_pom_from_repos(
+                        &client,
+                        &repos,
+                        &local_cache,
+                        &group,
+                        &artifact,
+                        &version,
+                    )
+                    .await;
                     (format!("{group}:{artifact}:{version}"), result)
                 });
             }
@@ -319,7 +325,7 @@ pub async fn resolve(
     }
 
     // Build flat artifact list for lockfile
-    let artifacts = build_artifact_list(&graph, &pom_cache, repos);
+    let artifacts = build_artifact_list(&graph, repos);
 
     Ok(ResolutionResult {
         graph,
@@ -475,7 +481,6 @@ fn propagate_scope(parent_scope: &str, dep_scope: &str) -> String {
 /// Build a flat list of resolved artifacts from the graph.
 fn build_artifact_list(
     graph: &DependencyGraph,
-    _pom_cache: &HashMap<String, Pom>,
     repos: &[MavenRepository],
 ) -> Vec<ResolvedArtifact> {
     let mut artifacts = Vec::new();

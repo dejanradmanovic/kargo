@@ -8,7 +8,8 @@ license.workspace = true
 
 [dependencies]
 kargo-util.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+reqwest.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
 semver.workspace = true
 sha2.workspace = true

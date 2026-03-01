@@ -2,6 +2,7 @@
 
 use kargo_compiler::build_cache::BuildCache;
 use kargo_util::errors::KargoError;
+use kargo_util::fs::dir_size;
 
 /// Print cache statistics.
 pub fn stats() -> miette::Result<()> {
@@ -47,7 +48,12 @@ pub fn clean() -> miette::Result<()> {
         let deps_path = kargo_dir.join("dependencies");
         if deps_path.is_dir() {
             let freed = dir_size(&deps_path);
-            let _ = std::fs::remove_dir_all(&deps_path);
+            if let Err(e) = std::fs::remove_dir_all(&deps_path) {
+                tracing::warn!(
+                    "Failed to remove dependencies cache {}: {e}",
+                    deps_path.display()
+                );
+            }
             if freed > 0 {
                 println!("Cleared cached dependencies ({} freed)", format_size(freed));
             }
@@ -57,7 +63,12 @@ pub fn clean() -> miette::Result<()> {
         let fp_path = kargo_dir.join("fingerprints");
         if fp_path.is_dir() {
             let freed = dir_size(&fp_path);
-            let _ = std::fs::remove_dir_all(&fp_path);
+            if let Err(e) = std::fs::remove_dir_all(&fp_path) {
+                tracing::warn!(
+                    "Failed to remove fingerprints directory {}: {e}",
+                    fp_path.display()
+                );
+            }
             if freed > 0 {
                 println!("Cleared compiler metadata ({} freed)", format_size(freed));
             }
@@ -68,9 +79,9 @@ pub fn clean() -> miette::Result<()> {
 }
 
 /// Stop the Kotlin compiler daemon (if any).
-pub fn stop_daemon() -> miette::Result<()> {
+pub async fn stop_daemon() -> miette::Result<()> {
     let cwd = std::env::current_dir().map_err(KargoError::Io)?;
-    let preflight = crate::ops_setup::preflight(&cwd);
+    let preflight = crate::ops_setup::preflight(&cwd).await;
 
     let kotlinc = match preflight {
         Ok(ref pf) => pf.toolchain.kotlinc.clone(),
@@ -120,20 +131,4 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn dir_size(path: &std::path::Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(m) = entry.metadata() {
-                if m.is_dir() {
-                    total += dir_size(&entry.path());
-                } else {
-                    total += m.len();
-                }
-            }
-        }
-    }
-    total
 }

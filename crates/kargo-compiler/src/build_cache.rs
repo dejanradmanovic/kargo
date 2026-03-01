@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use kargo_util::errors::KargoError;
+use kargo_util::fs::dir_size as util_dir_size;
 
 use crate::fingerprint::Fingerprint;
 
@@ -41,7 +42,9 @@ impl BuildCache {
         let entry_dir = self.entry_dir(fp);
         if entry_dir.is_dir() {
             let marker = entry_dir.join(".kargo-cache-marker");
-            let _ = fs::write(&marker, chrono_now());
+            if let Err(e) = fs::write(&marker, chrono_now()) {
+                tracing::warn!("Failed to update cache marker {}: {e}", marker.display());
+            }
             Some(entry_dir)
         } else {
             None
@@ -58,14 +61,18 @@ impl BuildCache {
         // If replacing an existing entry, subtract its size first
         if entry_dir.exists() {
             let old_size = dir_size(&entry_dir);
-            let _ = fs::remove_dir_all(&entry_dir);
+            if let Err(e) = fs::remove_dir_all(&entry_dir) {
+                tracing::warn!("Failed to remove cache entry {}: {e}", entry_dir.display());
+            }
             self.adjust_tracked_size(-(old_size as i64));
         }
 
         copy_dir_recursive(classes_dir, &entry_dir)?;
 
         let marker = entry_dir.join(".kargo-cache-marker");
-        let _ = fs::write(&marker, chrono_now());
+        if let Err(e) = fs::write(&marker, chrono_now()) {
+            tracing::warn!("Failed to write cache marker {}: {e}", marker.display());
+        }
 
         let new_size = dir_size(&entry_dir);
         self.adjust_tracked_size(new_size as i64);
@@ -81,7 +88,12 @@ impl BuildCache {
             None => return Ok(false),
         };
         copy_dir_recursive(&entry_dir, target_dir)?;
-        let _ = fs::remove_file(target_dir.join(".kargo-cache-marker"));
+        if let Err(e) = fs::remove_file(target_dir.join(".kargo-cache-marker")) {
+            tracing::warn!(
+                "Failed to remove cache marker from {}: {e}",
+                target_dir.display()
+            );
+        }
         Ok(true)
     }
 
@@ -138,8 +150,18 @@ impl BuildCache {
     }
 
     fn write_tracked_size(&self, size: u64) {
-        let _ = fs::create_dir_all(&self.root);
-        let _ = fs::write(self.size_file_path(), size.to_string());
+        if let Err(e) = fs::create_dir_all(&self.root) {
+            tracing::warn!(
+                "Failed to create build cache root {}: {e}",
+                self.root.display()
+            );
+        }
+        if let Err(e) = fs::write(self.size_file_path(), size.to_string()) {
+            tracing::warn!(
+                "Failed to write cache size file {}: {e}",
+                self.size_file_path().display()
+            );
+        }
     }
 
     fn adjust_tracked_size(&self, delta: i64) {
@@ -183,7 +205,9 @@ impl BuildCache {
                 break;
             }
             let entry_size = dir_size(dir);
-            let _ = fs::remove_dir_all(dir);
+            if let Err(e) = fs::remove_dir_all(dir) {
+                tracing::warn!("Failed to evict cache entry {}: {e}", dir.display());
+            }
             current_size = current_size.saturating_sub(entry_size);
         }
 
@@ -228,24 +252,15 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> miette::Result<()> {
     Ok(())
 }
 
+/// Directory size excluding the SIZE_FILE metadata (used for cache tracking).
 fn dir_size(path: &Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(m) = entry.metadata() {
-                if m.is_dir() {
-                    total += dir_size(&entry.path());
-                } else {
-                    // Don't count the size metadata file itself
-                    let name = entry.file_name();
-                    if name != SIZE_FILE {
-                        total += m.len();
-                    }
-                }
-            }
-        }
+    let total = util_dir_size(path);
+    let size_file = path.join(SIZE_FILE);
+    if size_file.is_file() {
+        total.saturating_sub(fs::metadata(&size_file).map(|m| m.len()).unwrap_or(0))
+    } else {
+        total
     }
-    total
 }
 
 #[cfg(test)]

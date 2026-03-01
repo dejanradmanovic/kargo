@@ -53,14 +53,14 @@ pub struct BuildContext {
 
 impl BuildContext {
     /// Load all project metadata and resolve build configuration.
-    pub fn load(
+    pub async fn load(
         project_dir: &Path,
         target: Option<&str>,
         profile: Option<&str>,
         release: bool,
     ) -> miette::Result<Self> {
-        let preflight = crate::ops_setup::preflight(project_dir)?;
-        crate::ops_setup::ensure_lockfile(project_dir)?;
+        let preflight = crate::ops_setup::preflight(project_dir).await?;
+        crate::ops_setup::ensure_lockfile(project_dir).await?;
 
         let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;
         let lockfile = Lockfile::from_path(&project_dir.join("Kargo.lock"))
@@ -70,13 +70,19 @@ impl BuildContext {
             .or_else(|| manifest.targets.keys().next().map(|s| s.as_str()))
             .unwrap_or("jvm");
 
-        let kotlin_target = KotlinTarget::parse(target_name).ok_or_else(|| KargoError::Generic {
-            message: format!(
-                "Unknown target '{}'. Available: {}",
-                target_name,
-                manifest.targets.keys().cloned().collect::<Vec<_>>().join(", ")
-            ),
-        })?;
+        let kotlin_target =
+            KotlinTarget::parse(target_name).ok_or_else(|| KargoError::Generic {
+                message: format!(
+                    "Unknown target '{}'. Available: {}",
+                    target_name,
+                    manifest
+                        .targets
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })?;
 
         let profile_name = if let Some(p) = profile {
             p.to_string()

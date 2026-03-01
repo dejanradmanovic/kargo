@@ -7,6 +7,7 @@ use miette::Result;
 use kargo_core::config::GlobalConfig;
 use kargo_toolchain::install;
 use kargo_toolchain::sdk;
+use kargo_util::fs::dir_size;
 
 use crate::ops_self_update::{self, UpdateCheck};
 
@@ -125,11 +126,11 @@ pub fn cmd_clean() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
+pub async fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
     println!("  Kargo {pkg_version} (current)");
     println!("  Checking for updates...");
 
-    match ops_self_update::check_for_update(pkg_version)? {
+    match ops_self_update::check_for_update(pkg_version).await? {
         UpdateCheck::UpToDate(v) => {
             println!("  Already up to date (v{v}).");
         }
@@ -142,32 +143,13 @@ pub fn cmd_update(pkg_version: &str, check_only: bool) -> Result<()> {
                 return Ok(());
             }
 
-            ops_self_update::apply_update(&info)?;
+            ops_self_update::apply_update(&info).await?;
             println!();
             println!("  Restart your shell or run `kargo --version` to verify.");
         }
     }
 
     Ok(())
-}
-
-fn dir_size(path: &std::path::Path) -> u64 {
-    walkdir(path)
-}
-
-fn walkdir(path: &std::path::Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let p = entry.path();
-            if p.is_dir() {
-                total += walkdir(&p);
-            } else if let Ok(meta) = p.metadata() {
-                total += meta.len();
-            }
-        }
-    }
-    total
 }
 
 fn format_bytes(bytes: u64) -> String {

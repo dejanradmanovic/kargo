@@ -11,7 +11,7 @@ pub fn exec(reveal: bool) -> Result<()> {
             message: "Could not find Kargo.toml in this directory or any parent".to_string(),
         })?;
 
-    let env_vars = load_env_file(&project_root.join(".kargo.env")).map_err(KargoError::Io)?;
+    let env_vars = load_env_file(&project_root.join(".kargo.env"))?;
 
     if env_vars.is_empty() {
         println!("No environment variables configured.");

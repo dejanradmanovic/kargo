@@ -36,10 +36,17 @@ pub fn check(unit: &CompilationUnit, fp_dir: &Path, kotlin_version: &str) -> Inc
         return IncrementalDecision::NeedsRebuild(fp);
     }
 
-    // Fast path: mtime comparison
+    // Fast path: mtime + source count comparison.
+    // Removing a file doesn't increase max mtime, so we also check that the
+    // number of source files hasn't changed.
     let current_mtime = fingerprint::max_mtime(unit);
-    if let Some(stored_mtime) = fingerprint::load_mtime(fp_dir, &unit.name) {
-        if current_mtime <= stored_mtime && fingerprint::load(fp_dir, &unit.name).is_some() {
+    let current_count = unit.sources.len();
+    if let Some((stored_mtime, stored_count)) = fingerprint::load_mtime(fp_dir, &unit.name) {
+        let count_matches = stored_count == 0 || current_count == stored_count;
+        if current_mtime <= stored_mtime
+            && count_matches
+            && fingerprint::load(fp_dir, &unit.name).is_some()
+        {
             return IncrementalDecision::UpToDate;
         }
     }
@@ -50,7 +57,7 @@ pub fn check(unit: &CompilationUnit, fp_dir: &Path, kotlin_version: &str) -> Inc
     match fingerprint::load(fp_dir, &unit.name) {
         Some(stored) if stored == current => {
             // Content hasn't actually changed (e.g. file was touched but not modified).
-            let _ = fingerprint::save_mtime(fp_dir, &unit.name, current_mtime);
+            let _ = fingerprint::save_mtime(fp_dir, &unit.name, current_mtime, current_count);
             IncrementalDecision::UpToDate
         }
         _ => IncrementalDecision::NeedsRebuild(current),
@@ -66,7 +73,7 @@ pub fn mark_complete(
 ) -> miette::Result<()> {
     fingerprint::save(fp_dir, unit_name, fp)?;
     let mtime = fingerprint::max_mtime(unit);
-    fingerprint::save_mtime(fp_dir, unit_name, mtime)?;
+    fingerprint::save_mtime(fp_dir, unit_name, mtime, unit.sources.len())?;
     Ok(())
 }
 

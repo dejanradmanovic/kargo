@@ -4,7 +4,7 @@ use kargo_core::template::{TemplateContext, TemplateRegistry};
 use kargo_core::DEFAULT_KOTLIN_VERSION;
 use kargo_util::errors::KargoError;
 
-pub fn exec(template: &str) -> Result<()> {
+pub async fn exec(template: &str) -> Result<()> {
     let cwd = std::env::current_dir().map_err(KargoError::Io)?;
     let manifest_path = cwd.join("Kargo.toml");
 
@@ -34,7 +34,7 @@ pub fn exec(template: &str) -> Result<()> {
 
     println!("Initialized Kargo project in {}", cwd.display());
 
-    kargo_ops::ops_setup::post_scaffold(&cwd);
+    kargo_ops::ops_setup::post_scaffold(&cwd).await;
 
     Ok(())
 }

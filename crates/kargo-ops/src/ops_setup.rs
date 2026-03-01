@@ -33,7 +33,7 @@ pub struct PreflightResult {
 /// critical is missing. It will auto-download the Kotlin compiler if
 /// `auto_download` is enabled in the global config, but will not interactively
 /// prompt the user for JDK/SDK installation — those must already be present.
-pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
+pub async fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
     let manifest = load_manifest(project_dir)?;
     let config = match GlobalConfig::load() {
         Ok(c) => c,
@@ -58,7 +58,8 @@ pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
         &version,
         config.toolchain.auto_download,
         mirror,
-    )?;
+    )
+    .await?;
 
     // 2. JDK (always required for Kotlin compilation)
     let java_target = manifest
@@ -182,7 +183,7 @@ pub fn print_preflight_summary(result: &PreflightResult) {
 ///
 /// Called after `kargo new` and `kargo init`. All errors are non-fatal
 /// (printed as warnings) — the project is always created regardless.
-pub fn post_scaffold(project_dir: &Path) {
+pub async fn post_scaffold(project_dir: &Path) {
     println!();
     println!("  Setting up toolchain...");
 
@@ -200,7 +201,7 @@ pub fn post_scaffold(project_dir: &Path) {
     };
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
-    setup_kotlin(&manifest_path, &config, mirror);
+    setup_kotlin(&manifest_path, &config, mirror).await;
 
     let manifest_content = match std::fs::read_to_string(&manifest_path) {
         Ok(c) => c,
@@ -211,10 +212,10 @@ pub fn post_scaffold(project_dir: &Path) {
         Err(_) => return,
     };
 
-    setup_jdk(&config, &manifest);
-    setup_target_sdks(&manifest);
+    setup_jdk(&config, &manifest).await;
+    setup_target_sdks(&manifest).await;
 
-    resolve_lockfile(project_dir);
+    resolve_lockfile(project_dir).await;
 
     println!();
     println!("  Ready to build!");
@@ -234,7 +235,7 @@ fn load_manifest(project_dir: &Path) -> miette::Result<Manifest> {
     Manifest::from_path(&manifest_path)
 }
 
-fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str>) {
+async fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str>) {
     let version = match KotlinVersion::from_manifest(manifest_path) {
         Ok(v) => v,
         Err(e) => {
@@ -246,7 +247,7 @@ fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str
     if install::is_installed(&version) {
         println!("  Kotlin {} already installed.", version);
     } else if config.toolchain.auto_download {
-        match install::install_kotlin(&version, mirror) {
+        match install::install_kotlin(&version, mirror).await {
             Ok(_) => {}
             Err(e) => {
                 println!("  Warning: failed to install Kotlin {version}: {e}");
@@ -264,7 +265,7 @@ fn setup_kotlin(manifest_path: &Path, config: &GlobalConfig, mirror: Option<&str
     }
 }
 
-fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
+async fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
     let java_target = manifest
         .targets
         .values()
@@ -288,7 +289,7 @@ fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
                     found.version
                 );
             }
-            match sdk::prompt_and_install_jdk(java_target) {
+            match sdk::prompt_and_install_jdk(java_target).await {
                 Ok(jdk) => {
                     println!("  JDK {} ready.", jdk.version);
                 }
@@ -303,7 +304,7 @@ fn setup_jdk(config: &GlobalConfig, manifest: &Manifest) {
     }
 }
 
-fn setup_target_sdks(manifest: &Manifest) {
+async fn setup_target_sdks(manifest: &Manifest) {
     let has_android = manifest.targets.keys().any(|k| k == "android");
     let has_ios = manifest
         .targets
@@ -329,7 +330,7 @@ fn setup_target_sdks(manifest: &Manifest) {
                     }
                 }
             }
-            None => match sdk::prompt_and_install_android_sdk(compile_sdk) {
+            None => match sdk::prompt_and_install_android_sdk(compile_sdk).await {
                 Ok(android) => {
                     println!("  Android SDK ready at {}", android.home.display());
                 }
@@ -360,7 +361,7 @@ fn setup_target_sdks(manifest: &Manifest) {
 /// Resolve dependencies and generate `Kargo.lock` after scaffolding.
 ///
 /// Best-effort: errors are printed as warnings but never block project creation.
-fn resolve_lockfile(project_dir: &Path) {
+async fn resolve_lockfile(project_dir: &Path) {
     let manifest_path = project_dir.join("Kargo.toml");
     let manifest = match Manifest::from_path(&manifest_path) {
         Ok(m) => m,
@@ -373,15 +374,7 @@ fn resolve_lockfile(project_dir: &Path) {
 
     println!("  Resolving dependencies...");
 
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            println!("  Warning: could not start async runtime: {e}");
-            return;
-        }
-    };
-
-    if let Err(e) = rt.block_on(crate::ops_fetch::fetch(project_dir, false)) {
+    if let Err(e) = crate::ops_fetch::fetch(project_dir, false).await {
         println!("  Warning: failed to resolve dependencies: {e}");
     }
 }
@@ -391,7 +384,7 @@ fn resolve_lockfile(project_dir: &Path) {
 /// Called during `preflight`. If the lockfile is missing or stale, triggers
 /// a fresh resolution. Also verifies cached JAR checksums against the lockfile
 /// to detect corruption or tampering.
-pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
+pub async fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
     let manifest_path = project_dir.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
 
@@ -411,8 +404,6 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
                 if !lf.is_up_to_date(&declared) {
                     true
                 } else {
-                    // Lockfile is up-to-date, but check that cached JARs
-                    // actually exist. If any are missing, re-fetch.
                     let cache = kargo_maven::cache::LocalCache::new(project_dir);
                     lf.package.iter().any(|pkg| {
                         let scope = pkg.scope.as_deref().unwrap_or("compile");
@@ -432,10 +423,7 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
     };
 
     if needs_resolve {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-        rt.block_on(crate::ops_fetch::fetch(project_dir, false))?;
+        crate::ops_fetch::fetch(project_dir, false).await?;
     }
 
     // Verify cached JAR checksums against the lockfile
@@ -455,9 +443,11 @@ fn verify_cached_checksums(
 ) -> miette::Result<()> {
     let cache = kargo_maven::cache::LocalCache::new(project_dir);
 
+    let mut tasks: Vec<(String, std::path::PathBuf, String)> = Vec::new();
+
     for pkg in &lockfile.package {
         let expected = match &pkg.checksum {
-            Some(c) if !c.is_empty() => c,
+            Some(c) if !c.is_empty() => c.clone(),
             _ => continue,
         };
 
@@ -466,27 +456,47 @@ fn verify_cached_checksums(
             None => continue,
         };
 
-        let data = std::fs::read(&jar_path).map_err(|e| KargoError::Generic {
-            message: format!(
-                "Failed to read cached JAR {}:{}:{}: {e}",
-                pkg.group, pkg.name, pkg.version
-            ),
-        })?;
+        let key = format!("{}:{}:{}", pkg.group, pkg.name, pkg.version);
+        tasks.push((key, jar_path, expected));
+    }
 
-        let actual = kargo_util::hash::sha256_bytes(&data);
-        if actual != *expected {
-            return Err(KargoError::Generic {
-                message: format!(
-                    "Checksum mismatch for {}:{}:{}\n  \
-                     expected: {expected}\n  \
-                     actual:   {actual}\n\
-                     The cached JAR may be corrupted. \
-                     Run `kargo fetch` to re-download.",
-                    pkg.group, pkg.name, pkg.version
-                ),
-            }
-            .into());
-        }
+    // Hash JARs in parallel using thread scope with streaming hashing
+    let results: Vec<miette::Result<()>> = std::thread::scope(|s| {
+        let handles: Vec<_> = tasks
+            .iter()
+            .map(|(key, jar_path, expected)| {
+                let key = key.clone();
+                let jar_path = jar_path.clone();
+                let expected = expected.clone();
+                s.spawn(move || -> miette::Result<()> {
+                    let actual =
+                        kargo_util::hash::sha256_file_streaming(&jar_path).map_err(|e| {
+                            KargoError::Generic {
+                                message: format!("Failed to read cached JAR {key}: {e}"),
+                            }
+                        })?;
+                    if actual != expected {
+                        return Err(KargoError::Generic {
+                            message: format!(
+                                "Checksum mismatch for {key}\n  \
+                                 expected: {expected}\n  \
+                                 actual:   {actual}\n\
+                                 The cached JAR may be corrupted. \
+                                 Run `kargo fetch` to re-download.",
+                            ),
+                        }
+                        .into());
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    for result in results {
+        result?;
     }
 
     Ok(())

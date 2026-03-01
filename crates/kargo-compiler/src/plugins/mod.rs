@@ -19,11 +19,25 @@ pub mod ksp;
 pub use kapt::*;
 pub use ksp::*;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use kargo_core::dependency::Dependency;
 use kargo_core::manifest::Manifest;
 use kargo_maven::cache::LocalCache;
+
+/// Shared context for annotation processing invocations (KSP2, KSP1, KAPT).
+#[derive(Clone, Copy)]
+pub struct ApContext<'a> {
+    pub processors: &'a [ProcessorInfo],
+    pub cache: &'a LocalCache,
+    pub sources: &'a [PathBuf],
+    pub library_jars: &'a [PathBuf],
+    pub processor_scope_jars: &'a [PathBuf],
+    pub kotlin_home: &'a Path,
+    pub jdk_home: &'a Path,
+    pub project_dir: &'a Path,
+    pub generated_dir: &'a Path,
+}
 
 // ---------------------------------------------------------------------------
 // Processor detection

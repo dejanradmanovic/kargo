@@ -344,9 +344,12 @@ impl Manifest {
         // group: if present, valid Maven group (dot-separated identifiers)
         if let Some(ref group) = self.package.group {
             if group.is_empty()
-                || !group
-                    .split('.')
-                    .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'))
+                || !group.split('.').all(|seg| {
+                    !seg.is_empty()
+                        && seg
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                })
             {
                 return Err(err(format!(
                     "package.group '{}' is not a valid Maven group ID (expected dot-separated identifiers)",
@@ -384,6 +387,20 @@ impl Manifest {
             }
         }
 
+        for (name, entry) in &self.repositories {
+            if let RepositoryEntry::Detailed {
+                password: Some(pw), ..
+            } = entry
+            {
+                if !pw.starts_with("${env:") {
+                    tracing::warn!(
+                        "Repository '{name}' has a plain-text password in Kargo.toml. \
+                         Consider using ${{env:VAR}} interpolation for security."
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -391,5 +408,7 @@ impl Manifest {
 fn is_valid_kotlin_version(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     matches!(parts.len(), 2 | 3)
-        && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }

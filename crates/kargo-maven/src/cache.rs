@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use kargo_util::fs::dir_size;
+
 use crate::pom::{self, Pom};
 use crate::repository::MavenRepository;
 
@@ -198,15 +200,17 @@ fn collect_version_dirs(
                     // win "nearest wins"; those POM-only dirs are harmless.
                     let has_jar = fs::read_dir(&path)
                         .map(|rd| {
-                            rd.flatten().any(|e| {
-                                e.path()
-                                    .extension()
-                                    .is_some_and(|ext| ext == "jar")
-                            })
+                            rd.flatten()
+                                .any(|e| e.path().extension().is_some_and(|ext| ext == "jar"))
                         })
                         .unwrap_or(false);
                     if has_jar {
-                        let _ = fs::remove_dir_all(&path);
+                        if let Err(e) = fs::remove_dir_all(&path) {
+                            tracing::warn!(
+                                "Failed to remove pruned cache artifact {}: {e}",
+                                path.display()
+                            );
+                        }
                         *removed += 1;
                     }
                 }
@@ -218,7 +222,12 @@ fn collect_version_dirs(
                 .map(|mut rd| rd.next().is_none())
                 .unwrap_or(true)
             {
-                let _ = fs::remove_dir(&path);
+                if let Err(e) = fs::remove_dir(&path) {
+                    tracing::warn!(
+                        "Failed to remove empty cache directory {}: {e}",
+                        path.display()
+                    );
+                }
             }
         }
     }
@@ -241,23 +250,6 @@ fn reconstruct_coordinate(root: &Path, version_dir: &Path) -> Option<(String, St
     let artifact = components[components.len() - 2].clone();
     let group = components[..components.len() - 2].join(".");
     Some((group, artifact, version))
-}
-
-fn dir_size(path: &Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let meta = entry.metadata();
-            if let Ok(m) = meta {
-                if m.is_dir() {
-                    total += dir_size(&entry.path());
-                } else {
-                    total += m.len();
-                }
-            }
-        }
-    }
-    total
 }
 
 #[cfg(test)]

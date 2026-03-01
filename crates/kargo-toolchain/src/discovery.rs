@@ -13,7 +13,6 @@ pub struct ToolchainPaths {
     pub home: PathBuf,
     pub version: KotlinVersion,
     pub kotlinc: PathBuf,
-    pub kotlinc_jvm: PathBuf,
     pub kotlin_native: Option<PathBuf>,
 }
 
@@ -22,7 +21,6 @@ impl ToolchainPaths {
     fn from_home(home: PathBuf, version: KotlinVersion) -> Self {
         let bin = home.join("bin");
         let kotlinc = bin.join("kotlinc");
-        let kotlinc_jvm = kotlinc.clone();
 
         // kotlin-native ships as a separate download; it may or may not
         // be present inside the standard compiler distribution.
@@ -37,7 +35,6 @@ impl ToolchainPaths {
             home,
             version,
             kotlinc,
-            kotlinc_jvm,
             kotlin_native,
         }
     }
@@ -48,7 +45,7 @@ impl ToolchainPaths {
 /// 1. If the version is already installed under `~/.kargo/toolchains/`, use it.
 /// 2. If `auto_download` is true, download and install it.
 /// 3. Otherwise return an error.
-pub fn resolve_toolchain(
+pub async fn resolve_toolchain(
     version: &KotlinVersion,
     auto_download: bool,
     mirror: Option<&str>,
@@ -60,7 +57,7 @@ pub fn resolve_toolchain(
     }
 
     if auto_download {
-        let installed_home = install::install_kotlin(version, mirror)?;
+        let installed_home = install::install_kotlin(version, mirror).await?;
         return Ok(ToolchainPaths::from_home(installed_home, version.clone()));
     }
 
@@ -76,7 +73,7 @@ pub fn resolve_toolchain(
 ///
 /// Reads `Kargo.toml` in `project_dir` (or its ancestors) to find the
 /// required Kotlin version, then resolves the toolchain.
-pub fn resolve_project_toolchain(
+pub async fn resolve_project_toolchain(
     project_dir: &std::path::Path,
     auto_download: bool,
     mirror: Option<&str>,
@@ -88,5 +85,5 @@ pub fn resolve_project_toolchain(
         })?;
 
     let version = KotlinVersion::from_manifest(&manifest_path)?;
-    resolve_toolchain(&version, auto_download, mirror)
+    resolve_toolchain(&version, auto_download, mirror).await
 }

@@ -30,7 +30,10 @@ pub fn is_installed(version: &KotlinVersion) -> bool {
 }
 
 /// Download, verify, extract, and register a Kotlin compiler version.
-pub fn install_kotlin(version: &KotlinVersion, mirror: Option<&str>) -> miette::Result<PathBuf> {
+pub async fn install_kotlin(
+    version: &KotlinVersion,
+    mirror: Option<&str>,
+) -> miette::Result<PathBuf> {
     let dest = toolchain_dir(version);
     if dest.is_dir() {
         println!("  Kotlin {version} is already installed.");
@@ -45,10 +48,9 @@ pub fn install_kotlin(version: &KotlinVersion, mirror: Option<&str>) -> miette::
         .join(format!("kotlin-compiler-{version}.zip"));
 
     let url = download::compiler_zip_url(version, mirror);
-    download::download_file(&url, &zip_path)?;
+    download::download_file(&url, &zip_path).await?;
 
-    // Verify checksum
-    match download::fetch_checksum(version, mirror) {
+    match download::fetch_checksum(version, mirror).await {
         Ok(expected) if !expected.is_empty() => {
             print!("  Verifying checksum... ");
             download::verify_checksum(&zip_path, &expected)?;
@@ -86,7 +88,9 @@ pub fn uninstall_kotlin(version: &KotlinVersion) -> miette::Result<()> {
 
     // Clear default if it pointed to this version
     if get_default().as_ref() == Some(version) {
-        let _ = fs::remove_file(default_marker_path());
+        if let Err(e) = fs::remove_file(default_marker_path()) {
+            tracing::warn!("Failed to remove default Kotlin marker file: {e}");
+        }
     }
     Ok(())
 }

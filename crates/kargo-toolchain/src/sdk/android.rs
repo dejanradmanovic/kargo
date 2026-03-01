@@ -149,7 +149,7 @@ pub fn ensure_android_components(info: &AndroidSdkInfo, compile_sdk: u32) -> mie
 }
 
 /// Prompt the user for Android SDK installation when it's missing.
-pub fn prompt_and_install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
+pub async fn prompt_and_install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
     let labels = [
         "Install automatically (recommended)",
         "Show me what to do manually",
@@ -180,11 +180,11 @@ pub fn prompt_and_install_android_sdk(compile_sdk: u32) -> miette::Result<Androi
         .into());
     }
 
-    install_android_sdk(compile_sdk)
+    install_android_sdk(compile_sdk).await
 }
 
 /// Download command-line tools and use sdkmanager to install required components.
-pub fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
+pub async fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
     let sdk_home = managed_android_sdk_dir();
     kargo_util::fs::ensure_dir(&sdk_home).map_err(KargoError::Io)?;
 
@@ -193,7 +193,7 @@ pub fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
     let cmdline_url = android_cmdline_tools_url()?;
     let tmp_dir = tempfile::tempdir().map_err(KargoError::Io)?;
     let zip_path = tmp_dir.path().join("cmdline-tools.zip");
-    download::download_file(&cmdline_url, &zip_path)?;
+    download::download_file(&cmdline_url, &zip_path).await?;
 
     let cmdline_dest = sdk_home.join("cmdline-tools").join("latest");
     kargo_util::fs::ensure_dir(&cmdline_dest).map_err(KargoError::Io)?;
@@ -209,7 +209,12 @@ pub fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
                 fs::rename(entry.path(), target).map_err(KargoError::Io)?;
             }
         }
-        let _ = fs::remove_dir_all(&inner);
+        if let Err(e) = fs::remove_dir_all(&inner) {
+            tracing::warn!(
+                "Failed to remove Android SDK cmdline-tools inner directory {}: {e}",
+                inner.display()
+            );
+        }
     }
 
     let sdkmanager = sdkmanager_path(&sdk_home);

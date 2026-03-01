@@ -2,7 +2,7 @@
 
 use miette::Result;
 
-pub fn exec(verbose: bool) -> Result<()> {
+pub async fn exec(verbose: bool) -> Result<()> {
     let project_root = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
 
     if !project_root.join("Kargo.toml").is_file() {
@@ -12,10 +12,5 @@ pub fn exec(verbose: bool) -> Result<()> {
         .into());
     }
 
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| kargo_util::errors::KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-
-    rt.block_on(kargo_ops::ops_lock::lock(&project_root, verbose))
+    kargo_ops::ops_lock::lock(&project_root, verbose).await
 }

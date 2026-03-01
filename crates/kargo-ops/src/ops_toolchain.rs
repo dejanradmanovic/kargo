@@ -16,7 +16,7 @@ fn try_load_project_manifest() -> Option<Manifest> {
     Manifest::from_path(&manifest_dir.join("Kargo.toml")).ok()
 }
 
-pub fn cmd_install(
+pub async fn cmd_install(
     version_str: Option<&str>,
     jdk_version: Option<&str>,
     android_version: Option<&str>,
@@ -67,7 +67,7 @@ pub fn cmd_install(
             println!("  Kotlin {version} already installed (from {from}).");
         } else {
             println!("  Installing Kotlin {version} (from {from})...");
-            install::install_kotlin(&version, mirror)?;
+            install::install_kotlin(&version, mirror).await?;
         }
 
         if install::get_default().is_none() {
@@ -102,7 +102,7 @@ pub fn cmd_install(
             }
             None => {
                 println!("  JDK >= {required} required (from {from}).");
-                sdk::prompt_and_install_jdk(&java_ver)?;
+                sdk::prompt_and_install_jdk(&java_ver).await?;
             }
         }
     }
@@ -137,7 +137,7 @@ pub fn cmd_install(
                 println!(
                     "  Android SDK not found. Installing with compile-sdk {compile_sdk} (from {from})..."
                 );
-                sdk::prompt_and_install_android_sdk(compile_sdk)?;
+                sdk::prompt_and_install_android_sdk(compile_sdk).await?;
             }
         }
     }
@@ -251,7 +251,7 @@ pub fn cmd_remove(
     Ok(())
 }
 
-pub fn cmd_use(version_str: &str) -> Result<()> {
+pub async fn cmd_use(version_str: &str) -> Result<()> {
     let version: KotlinVersion =
         version_str
             .parse()
@@ -263,7 +263,7 @@ pub fn cmd_use(version_str: &str) -> Result<()> {
         println!("  Kotlin {version} is not installed. Installing...");
         let config = GlobalConfig::load()?;
         let mirror = config.toolchain.kotlin_mirror.as_deref();
-        install::install_kotlin(&version, mirror)?;
+        install::install_kotlin(&version, mirror).await?;
     }
 
     install::set_default(&version)?;
@@ -271,27 +271,34 @@ pub fn cmd_use(version_str: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_path() -> Result<PathBuf> {
+pub async fn cmd_path() -> Result<PathBuf> {
     let config = GlobalConfig::load()?;
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
     let cwd = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
-    let paths = kargo_toolchain::discovery::resolve_project_toolchain(
+
+    let paths = match kargo_toolchain::discovery::resolve_project_toolchain(
         &cwd,
         config.toolchain.auto_download,
         mirror,
     )
-    .or_else(|_| {
-        let default =
-            install::get_default().ok_or_else(|| kargo_util::errors::KargoError::Toolchain {
-                message: "No Kargo project found and no default toolchain set".to_string(),
+    .await
+    {
+        Ok(p) => p,
+        Err(_) => {
+            let default = install::get_default().ok_or_else(|| {
+                kargo_util::errors::KargoError::Toolchain {
+                    message: "No Kargo project found and no default toolchain set".to_string(),
+                }
             })?;
-        kargo_toolchain::discovery::resolve_toolchain(
-            &default,
-            config.toolchain.auto_download,
-            mirror,
-        )
-    })?;
+            kargo_toolchain::discovery::resolve_toolchain(
+                &default,
+                config.toolchain.auto_download,
+                mirror,
+            )
+            .await?
+        }
+    };
 
     Ok(paths.home)
 }

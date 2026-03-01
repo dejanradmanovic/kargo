@@ -57,7 +57,7 @@ pub enum UpdateCheck {
 // -----------------------------------------------------------------------
 
 /// Query GitHub Releases for the latest version and compare with `current`.
-pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
+pub async fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
     let current: Version = current_version
         .trim_start_matches('v')
         .parse()
@@ -65,7 +65,7 @@ pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
             message: format!("Cannot parse current version '{current_version}': {e}"),
         })?;
 
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release().await?;
     let latest: Version = release
         .tag_name
         .trim_start_matches('v')
@@ -109,14 +109,37 @@ pub fn check_for_update(current_version: &str) -> miette::Result<UpdateCheck> {
 }
 
 /// Download and install the update, replacing the currently running binary.
-pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
+pub async fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
     let current_exe = std::env::current_exe().map_err(KargoError::Io)?;
 
     let tmp_dir = tempfile::tempdir().map_err(KargoError::Io)?;
     let archive_path = tmp_dir.path().join(&info.asset_name);
 
     println!("  Downloading Kargo {}...", info.latest);
-    kargo_toolchain::download::download_file(&info.asset_url, &archive_path)?;
+    kargo_toolchain::download::download_file(&info.asset_url, &archive_path).await?;
+
+    let checksum_url = format!("{}.sha256", info.asset_url);
+    match reqwest::get(&checksum_url).await {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(expected) = resp.text().await {
+                let expected = expected.split_whitespace().next().unwrap_or("").to_string();
+                if !expected.is_empty() {
+                    let actual = kargo_util::hash::sha256_file(&archive_path)?;
+                    if actual != expected {
+                        return Err(KargoError::Generic {
+                            message: format!(
+                                "Checksum mismatch for downloaded update: expected {expected}, got {actual}"
+                            ),
+                        }
+                        .into());
+                    }
+                }
+            }
+        }
+        _ => {
+            tracing::warn!("Could not verify checksum for downloaded update");
+        }
+    }
 
     let new_binary = extract_binary(&archive_path, tmp_dir.path())?;
 
@@ -130,19 +153,23 @@ pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
 // Internals
 // -----------------------------------------------------------------------
 
-fn fetch_latest_release() -> miette::Result<GhRelease> {
+async fn fetch_latest_release() -> miette::Result<GhRelease> {
     let url = format!("{}/repos/{}/releases/latest", GITHUB_API_BASE, GITHUB_REPO);
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent("kargo-self-update")
         .build()
         .map_err(|e| KargoError::Network {
             message: format!("HTTP client error: {e}"),
         })?;
 
-    let resp = client.get(&url).send().map_err(|e| KargoError::Network {
-        message: format!("Failed to reach GitHub: {e}"),
-    })?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| KargoError::Network {
+            message: format!("Failed to reach GitHub: {e}"),
+        })?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(KargoError::Network {
@@ -161,7 +188,7 @@ fn fetch_latest_release() -> miette::Result<GhRelease> {
         .into());
     }
 
-    resp.json::<GhRelease>().map_err(|e| {
+    resp.json::<GhRelease>().await.map_err(|e| {
         KargoError::Network {
             message: format!("Failed to parse GitHub release JSON: {e}"),
         }
@@ -308,7 +335,9 @@ fn ls_dir(dir: &Path) -> String {
 fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     let backup = current_exe.with_extension("old");
 
-    let _ = fs::remove_file(&backup);
+    if let Err(e) = fs::remove_file(&backup) {
+        tracing::warn!("Failed to remove old backup file {}: {e}", backup.display());
+    }
 
     fs::rename(current_exe, &backup).map_err(|e| KargoError::Toolchain {
         message: format!(
@@ -319,7 +348,12 @@ fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     })?;
 
     fs::copy(new_binary, current_exe).map_err(|e| {
-        let _ = fs::rename(&backup, current_exe);
+        if let Err(revert_err) = fs::rename(&backup, current_exe) {
+            tracing::warn!(
+                "Failed to restore backup {}: {revert_err}",
+                backup.display()
+            );
+        }
         KargoError::Toolchain {
             message: format!(
                 "Failed to install new binary to {}: {e}",
@@ -331,10 +365,17 @@ fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(current_exe, fs::Permissions::from_mode(0o755));
+        if let Err(e) = fs::set_permissions(current_exe, fs::Permissions::from_mode(0o755)) {
+            tracing::warn!(
+                "Failed to set permissions on {}: {e}",
+                current_exe.display()
+            );
+        }
     }
 
-    let _ = fs::remove_file(&backup);
+    if let Err(e) = fs::remove_file(&backup) {
+        tracing::warn!("Failed to remove backup file {}: {e}", backup.display());
+    }
 
     Ok(())
 }

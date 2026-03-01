@@ -164,21 +164,34 @@ fn mtime_path(fp_dir: &Path, unit_name: &str) -> PathBuf {
     fp_dir.join(format!("{unit_name}.mtime"))
 }
 
-/// Load the previously stored mtime for a unit.
-pub fn load_mtime(fp_dir: &Path, unit_name: &str) -> Option<u64> {
+/// Load the previously stored mtime and source count for a unit.
+pub fn load_mtime(fp_dir: &Path, unit_name: &str) -> Option<(u64, usize)> {
     let path = mtime_path(fp_dir, unit_name);
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if let Some((mtime_str, count_str)) = trimmed.split_once(' ') {
+        let mtime = mtime_str.parse().ok()?;
+        let count = count_str.parse().ok()?;
+        Some((mtime, count))
+    } else {
+        // Backward compat: old markers without a count
+        let mtime = trimmed.parse().ok()?;
+        Some((mtime, 0))
+    }
 }
 
-/// Save the mtime marker after a successful compilation.
-pub fn save_mtime(fp_dir: &Path, unit_name: &str, mtime: u64) -> miette::Result<()> {
+/// Save the mtime marker and source count after a successful compilation.
+pub fn save_mtime(
+    fp_dir: &Path,
+    unit_name: &str,
+    mtime: u64,
+    source_count: usize,
+) -> miette::Result<()> {
     let path = mtime_path(fp_dir, unit_name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(kargo_util::errors::KargoError::Io)?;
     }
-    std::fs::write(&path, mtime.to_string()).map_err(|e| {
+    std::fs::write(&path, format!("{mtime} {source_count}")).map_err(|e| {
         kargo_util::errors::KargoError::Generic {
             message: format!("Failed to write mtime marker: {e}"),
         }
