@@ -56,7 +56,7 @@ md-5 = "0.10"
 semver = { version = "1", features = ["serde"] }
 
 # Graph data structures
-petgraph = "0.6"
+petgraph = "0.8"
 
 # Terminal UI
 indicatif = "0.17"
