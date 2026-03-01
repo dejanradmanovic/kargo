@@ -160,7 +160,10 @@ pub async fn audit(project_root: &Path, opts: &AuditOptions) -> miette::Result<(
     sp.finish_and_clear();
 
     if all_findings.is_empty() {
-        kargo_util::progress::status("Audit", &format!("{dep_count} dependencies — no vulnerabilities found"));
+        kargo_util::progress::status(
+            "Audit",
+            &format!("{dep_count} dependencies — no vulnerabilities found"),
+        );
         return Ok(());
     }
 

@@ -4,7 +4,7 @@ use miette::Result;
 
 use kargo_ops::ops_update::{self, UpdateOptions};
 
-pub fn exec(major: bool, dep: Option<String>, dry_run: bool) -> Result<()> {
+pub async fn exec(major: bool, dep: Option<String>, dry_run: bool) -> Result<()> {
     let project_root = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
 
     if !project_root.join("Kargo.toml").is_file() {
@@ -20,10 +20,5 @@ pub fn exec(major: bool, dep: Option<String>, dry_run: bool) -> Result<()> {
         dry_run,
     };
 
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| kargo_util::errors::KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-
-    rt.block_on(ops_update::update(&project_root, &opts))
+    ops_update::update(&project_root, &opts).await
 }

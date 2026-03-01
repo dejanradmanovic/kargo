@@ -1,0 +1,17 @@
+---
+description: Always run smoke tests on ksp-sample and kapt-sample after changing KSP/KAPT code
+globs: ["crates/kargo-compiler/src/plugins/ksp.rs", "crates/kargo-compiler/src/plugins/kapt.rs", "crates/kargo-compiler/src/plugins/mod.rs", "crates/kargo-ops/src/ops_build.rs"]
+---
+
+# AP Smoke Tests
+
+After any change to KSP or KAPT logic, always build **and run** both test projects before considering the work done:
+
+```bash
+cd tests/projects/ksp-sample && ../../../target/debug/kargo run
+cd tests/projects/kapt-sample && ../../../target/debug/kargo run
+```
+
+Build the kargo binary first with `cargo build` if needed.
+
+Both must complete with exit code 0 and produce expected output. If either fails, investigate and fix before proceeding.

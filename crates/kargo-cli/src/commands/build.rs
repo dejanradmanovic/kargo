@@ -4,7 +4,7 @@ use miette::Result;
 
 use kargo_ops::ops_build::{self, BuildOptions};
 
-pub fn exec(
+pub async fn exec(
     target: Option<&str>,
     profile: Option<&str>,
     release: bool,
@@ -24,7 +24,7 @@ pub fn exec(
         ..Default::default()
     };
 
-    let result = ops_build::build(&cwd, &opts)?;
+    let result = ops_build::build(&cwd, &opts).await?;
 
     if !result.success {
         std::process::exit(1);

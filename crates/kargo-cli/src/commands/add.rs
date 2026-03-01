@@ -4,7 +4,7 @@ use miette::Result;
 
 use kargo_ops::ops_add::{self, AddOptions};
 
-pub fn exec(dep: &str, dev: bool, target: Option<&str>, flavor: Option<&str>) -> Result<()> {
+pub async fn exec(dep: &str, dev: bool, target: Option<&str>, flavor: Option<&str>) -> Result<()> {
     let project_root = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
     let manifest_path = project_root.join("Kargo.toml");
 
@@ -35,11 +35,7 @@ pub fn exec(dep: &str, dev: bool, target: Option<&str>, flavor: Option<&str>) ->
         eprintln!("Added {dep} to [dependencies]");
     }
 
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| kargo_util::errors::KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-    rt.block_on(kargo_ops::ops_fetch::fetch(&project_root, false))?;
+    kargo_ops::ops_fetch::fetch(&project_root, false).await?;
 
     Ok(())
 }

@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-compiler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "globset",
  "kargo-core",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kargo-util",
  "miette",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-lint"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kargo-core",
  "kargo-util",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-maven"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "indicatif",
  "kargo-core",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-ops"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "indicatif",
  "kargo-compiler",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kargo-core",
  "kargo-util",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-resolver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kargo-core",
  "kargo-maven",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "kargo-toolchain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "atty",
  "console",
@@ -1249,12 +1249,11 @@ dependencies = [
 
 [[package]]
 name = "kargo-util"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console",
  "globset",
  "indicatif",
- "md-5",
  "miette",
  "serde",
  "sha2",

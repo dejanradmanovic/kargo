@@ -26,10 +26,10 @@ use miette::Result;
 use crate::cli::{Cli, Command};
 
 /// Route a parsed CLI invocation to the appropriate command handler.
-pub fn dispatch(cli: Cli) -> Result<()> {
+pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::New { name, template } => new::exec(&name, &template),
-        Command::Init { template } => init::exec(&template),
+        Command::New { name, template } => new::exec(&name, &template).await,
+        Command::Init { template } => init::exec(&template).await,
         Command::Clean { variant } => clean::exec(variant.as_deref()),
         Command::Env { reveal } => env::exec(reveal),
         Command::Toolchain { action } => toolchain::exec(action),
@@ -41,34 +41,37 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             timings,
             offline,
             ..
-        } => build::exec(
-            target.as_deref(),
-            profile.as_deref(),
-            release,
-            timings,
-            offline,
-            cli.verbose,
-        ),
-        Command::Run { target, args, .. } => run::exec(target.as_deref(), &args, cli.verbose),
-        Command::Test { target, filter, .. } => {
-            test_::exec(target.as_deref(), filter.as_deref(), cli.verbose)
+        } => {
+            build::exec(
+                target.as_deref(),
+                profile.as_deref(),
+                release,
+                timings,
+                offline,
+                cli.verbose,
+            )
+            .await
         }
-        Command::Check { .. } => check::exec(cli.verbose),
+        Command::Run { target, args, .. } => run::exec(target.as_deref(), &args, cli.verbose).await,
+        Command::Test { target, filter, .. } => {
+            test_::exec(target.as_deref(), filter.as_deref(), cli.verbose).await
+        }
+        Command::Check { .. } => check::exec(cli.verbose).await,
         Command::Cache { action } => cache::exec(action),
         Command::Add {
             dep,
             dev,
             target,
             flavor,
-        } => add::exec(&dep, dev, target.as_deref(), flavor.as_deref()),
+        } => add::exec(&dep, dev, target.as_deref(), flavor.as_deref()).await,
         Command::Remove {
             dep,
             dev,
             target,
             flavor,
-        } => remove::exec(&dep, dev, target.as_deref(), flavor.as_deref()),
-        Command::Fetch { verify } => fetch::exec(cli.verbose, verify),
-        Command::Lock => lock::exec(cli.verbose),
+        } => remove::exec(&dep, dev, target.as_deref(), flavor.as_deref()).await,
+        Command::Fetch { verify } => fetch::exec(cli.verbose, verify).await,
+        Command::Lock => lock::exec(cli.verbose).await,
         Command::Tree {
             depth,
             duplicates,
@@ -76,18 +79,18 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             why,
             conflicts,
             licenses,
-        } => tree::exec(depth, duplicates, inverted, why, conflicts, licenses),
-        Command::Outdated { major } => outdated::exec(major),
+        } => tree::exec(depth, duplicates, inverted, why, conflicts, licenses).await,
+        Command::Outdated { major } => outdated::exec(major).await,
         Command::Update {
             major,
             dep,
             dry_run,
-        } => update::exec(major, dep, dry_run),
-        Command::Audit { fail_on } => audit::exec(fail_on),
-        Command::Watch { build_only } => watch::exec(build_only, cli.verbose),
-        _ => {
-            eprintln!("This command is not yet implemented");
-            Ok(())
+        } => update::exec(major, dep, dry_run).await,
+        Command::Audit { fail_on } => audit::exec(fail_on).await,
+        Command::Watch { build_only } => watch::exec(build_only, cli.verbose).await,
+        _ => Err(kargo_util::errors::KargoError::Generic {
+            message: "This command is not yet implemented".to_string(),
         }
+        .into()),
     }
 }
