@@ -82,7 +82,7 @@ atty = "0.2"
 rhai = "1"
 
 # Tree-sitter for Kotlin parsing
-tree-sitter = "0.24"
+tree-sitter = "0.26"
 
 # Internal crates
 kargo-core = { path = "crates/kargo-core" }
