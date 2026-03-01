@@ -74,7 +74,7 @@ globset = "0.4"
 tempfile = "3"
 
 # Archive extraction
-zip = "2"
+zip = "8"
 
 # Terminal detection
 atty = "0.2"
