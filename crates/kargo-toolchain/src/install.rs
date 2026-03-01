@@ -86,7 +86,9 @@ pub fn uninstall_kotlin(version: &KotlinVersion) -> miette::Result<()> {
 
     // Clear default if it pointed to this version
     if get_default().as_ref() == Some(version) {
-        let _ = fs::remove_file(default_marker_path());
+        if let Err(e) = fs::remove_file(default_marker_path()) {
+            tracing::warn!("Failed to remove default Kotlin marker file: {e}");
+        }
     }
     Ok(())
 }

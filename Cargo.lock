@@ -1254,7 +1254,6 @@ dependencies = [
  "console",
  "globset",
  "indicatif",
- "md-5",
  "miette",
  "serde",
  "sha2",

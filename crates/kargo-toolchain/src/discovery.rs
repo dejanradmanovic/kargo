@@ -13,7 +13,6 @@ pub struct ToolchainPaths {
     pub home: PathBuf,
     pub version: KotlinVersion,
     pub kotlinc: PathBuf,
-    pub kotlinc_jvm: PathBuf,
     pub kotlin_native: Option<PathBuf>,
 }
 
@@ -22,7 +21,6 @@ impl ToolchainPaths {
     fn from_home(home: PathBuf, version: KotlinVersion) -> Self {
         let bin = home.join("bin");
         let kotlinc = bin.join("kotlinc");
-        let kotlinc_jvm = kotlinc.clone();
 
         // kotlin-native ships as a separate download; it may or may not
         // be present inside the standard compiler distribution.
@@ -37,7 +35,6 @@ impl ToolchainPaths {
             home,
             version,
             kotlinc,
-            kotlinc_jvm,
             kotlin_native,
         }
     }

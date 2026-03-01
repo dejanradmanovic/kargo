@@ -24,7 +24,7 @@ pub const JUNIT_PLATFORM_STANDALONE: &str = "junit-platform-console-standalone";
 pub const JUNIT_PLATFORM_VERSION: &str = "1.11.4";
 
 /// Run project tests.
-pub fn test(
+pub async fn test(
     project_dir: &Path,
     target: Option<&str>,
     filter: Option<&str>,
@@ -40,7 +40,8 @@ pub fn test(
             quiet: true,
             ..Default::default()
         },
-    )?;
+    )
+    .await?;
 
     if !build_result.success {
         return Err(KargoError::Generic {
@@ -54,8 +55,7 @@ pub fn test(
     let lockfile = &build_result.lockfile;
     let preflight = &build_result.preflight;
 
-    let discovered =
-        kargo_compiler::source_set_discovery::discover(project_dir, manifest);
+    let discovered = &build_result.discovered;
     let mut test_kotlin_dirs: Vec<PathBuf> = Vec::new();
     for ss in &discovered.test_sources {
         test_kotlin_dirs.extend(ss.kotlin_dirs.clone());
@@ -83,7 +83,7 @@ pub fn test(
     let test_classes_dir = build_result.build_dir.join("test-classes");
     std::fs::create_dir_all(&test_classes_dir).map_err(KargoError::Io)?;
 
-    let cp = classpath::assemble(project_dir, lockfile);
+    let cp = &build_result.classpath;
     let mut test_classpath = vec![build_result.classes_dir.clone()];
 
     let gen_base = build_result.build_dir.join("generated");
@@ -99,7 +99,11 @@ pub fn test(
     let kotlin_lib = preflight.toolchain.home.join("lib");
     for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS
         .iter()
-        .chain(&["kotlin-test.jar", "kotlin-test-junit5.jar", "kotlin-test-junit.jar"])
+        .chain(&[
+            "kotlin-test.jar",
+            "kotlin-test-junit5.jar",
+            "kotlin-test-junit.jar",
+        ])
     {
         let jar = kotlin_lib.join(jar_name);
         if jar.is_file()
@@ -111,7 +115,7 @@ pub fn test(
         }
     }
 
-    let junit_standalone = ensure_junit_platform(project_dir, lockfile)?;
+    let junit_standalone = ensure_junit_platform(project_dir, lockfile).await?;
     if let Some(ref jar) = junit_standalone {
         test_classpath.push(jar.clone());
     }
@@ -226,7 +230,11 @@ pub fn test(
 
     for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS
         .iter()
-        .chain(&["kotlin-test.jar", "kotlin-test-junit5.jar", "kotlin-test-junit.jar"])
+        .chain(&[
+            "kotlin-test.jar",
+            "kotlin-test-junit5.jar",
+            "kotlin-test-junit.jar",
+        ])
     {
         let jar = kotlin_lib.join(jar_name);
         if jar.is_file() {
@@ -353,7 +361,7 @@ fn detect_test_main_classes(test_sources: &[PathBuf], project_dir: &Path) -> Vec
     classes
 }
 
-fn ensure_junit_platform(
+async fn ensure_junit_platform(
     project_dir: &Path,
     lockfile: &kargo_core::lockfile::Lockfile,
 ) -> miette::Result<Option<PathBuf>> {
@@ -378,16 +386,13 @@ fn ensure_junit_platform(
         return Ok(Some(path));
     }
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
-        message: format!("Failed to create async runtime: {e}"),
-    })?;
-
-    let path = rt.block_on(kargo_compiler::plugins::ensure_maven_jar(
+    let path = kargo_compiler::plugins::ensure_maven_jar(
         &cache,
         JUNIT_PLATFORM_GROUP,
         JUNIT_PLATFORM_STANDALONE,
         JUNIT_PLATFORM_VERSION,
-    ))?;
+    )
+    .await?;
 
     Ok(path)
 }

@@ -57,9 +57,8 @@ fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
     main_sources.push(SourceSet::new("commonMain", src.to_path_buf()));
     added_main.insert("common".to_string());
 
-    test_sources.push(
-        SourceSet::new("commonTest", src.to_path_buf()).with_depends_on("commonMain"),
-    );
+    test_sources
+        .push(SourceSet::new("commonTest", src.to_path_buf()).with_depends_on("commonMain"));
     added_test.insert("common".to_string());
 
     // Collect all leaf target source set names
@@ -84,9 +83,8 @@ fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
                 .unwrap_or("common");
             let depends_on = format!("{parent_name}Main");
 
-            let main_ss =
-                SourceSet::new(format!("{intermediate}Main"), src.to_path_buf())
-                    .with_depends_on(&depends_on);
+            let main_ss = SourceSet::new(format!("{intermediate}Main"), src.to_path_buf())
+                .with_depends_on(&depends_on);
             main_sources.push(main_ss);
         }
         if added_test.insert(intermediate.to_string()) {
@@ -96,10 +94,9 @@ fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
                 .copied()
                 .unwrap_or("common");
 
-            let test_ss =
-                SourceSet::new(format!("{intermediate}Test"), src.to_path_buf())
-                    .with_depends_on(format!("{parent_name}Test"))
-                    .with_depends_on(format!("{intermediate}Main"));
+            let test_ss = SourceSet::new(format!("{intermediate}Test"), src.to_path_buf())
+                .with_depends_on(format!("{parent_name}Test"))
+                .with_depends_on(format!("{intermediate}Main"));
             test_sources.push(test_ss);
         }
     }
@@ -119,9 +116,8 @@ fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
                 .unwrap_or("common");
             let depends_on = format!("{parent_name}Main");
 
-            let target_main =
-                SourceSet::new(format!("{ss_name}Main"), src.to_path_buf())
-                    .with_depends_on(&depends_on);
+            let target_main = SourceSet::new(format!("{ss_name}Main"), src.to_path_buf())
+                .with_depends_on(&depends_on);
             main_sources.push(target_main);
         }
 
@@ -132,10 +128,9 @@ fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
                 .copied()
                 .unwrap_or("common");
 
-            let target_test =
-                SourceSet::new(format!("{ss_name}Test"), src.to_path_buf())
-                    .with_depends_on(format!("{parent_name}Test"))
-                    .with_depends_on(format!("{ss_name}Main"));
+            let target_test = SourceSet::new(format!("{ss_name}Test"), src.to_path_buf())
+                .with_depends_on(format!("{parent_name}Test"))
+                .with_depends_on(format!("{ss_name}Main"));
             test_sources.push(target_test);
         }
     }

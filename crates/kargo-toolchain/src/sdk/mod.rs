@@ -44,7 +44,10 @@ fn extract_zip_to(zip_path: &Path, dest: &Path) -> miette::Result<()> {
             {
                 use std::os::unix::fs::PermissionsExt;
                 if let Some(mode) = entry.unix_mode() {
-                    let _ = fs::set_permissions(&out_path, fs::Permissions::from_mode(mode));
+                    if let Err(e) = fs::set_permissions(&out_path, fs::Permissions::from_mode(mode))
+                    {
+                        tracing::warn!("Failed to set permissions on {}: {e}", out_path.display());
+                    }
                 }
             }
         }

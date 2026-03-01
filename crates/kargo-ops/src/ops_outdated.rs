@@ -1,6 +1,10 @@
 //! Operation: check for outdated direct dependencies.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use kargo_core::manifest::Manifest;
 use kargo_maven::download;
@@ -22,7 +26,7 @@ struct OutdatedEntry {
     current: String,
     latest: String,
     is_major: bool,
-    section: &'static str,
+    section: String,
 }
 
 /// Check direct dependencies for available updates and print a report.
@@ -40,35 +44,57 @@ pub async fn outdated(project_root: &Path, opts: &OutdatedOptions) -> miette::Re
         "org.jetbrains.kotlin".to_string(),
         "kotlin-stdlib".to_string(),
         manifest.package.kotlin.clone(),
-        "package.kotlin",
+        "package.kotlin".to_string(),
     ));
 
-    let mut entries: Vec<OutdatedEntry> = Vec::new();
+    let semaphore = Arc::new(Semaphore::new(8));
+    let mut join_set = JoinSet::new();
 
-    for (group, artifact, version, section) in &declared {
-        for repo in &repos {
-            let url = repo.metadata_url(group, artifact);
-            let xml = download::download_text(&client, repo, &url).await?;
-            if let Some(xml) = xml {
-                if let Ok(meta) = metadata::parse_metadata(&xml) {
-                    if let Some(ref latest) = meta.release.or(meta.latest) {
-                        let current = MavenVersion::parse(version);
-                        let latest_v = MavenVersion::parse(latest);
-                        if latest_v > current {
-                            let is_major = is_major_bump(version, latest);
-                            entries.push(OutdatedEntry {
-                                group: group.clone(),
-                                artifact: artifact.clone(),
-                                current: version.clone(),
-                                latest: latest.clone(),
-                                is_major,
-                                section,
-                            });
+    for (group, artifact, version, section) in declared {
+        let repos = repos.clone();
+        let client = client.clone();
+        let sem = semaphore.clone();
+
+        join_set.spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            for repo in &repos {
+                let url = repo.metadata_url(&group, &artifact);
+                match download::download_text(&client, repo, &url).await {
+                    Ok(Some(xml)) => {
+                        if let Ok(meta) = metadata::parse_metadata(&xml) {
+                            if let Some(ref latest) = meta.release.or(meta.latest) {
+                                let current = MavenVersion::parse(&version);
+                                let latest_v = MavenVersion::parse(latest);
+                                if latest_v > current {
+                                    let is_major = is_major_bump(&version, latest);
+                                    return Ok(Some(OutdatedEntry {
+                                        group,
+                                        artifact,
+                                        current: version,
+                                        latest: latest.clone(),
+                                        is_major,
+                                        section,
+                                    }));
+                                }
+                            }
                         }
+                        break;
                     }
+                    Ok(None) => continue,
+                    Err(e) => return Err(e),
                 }
-                break;
             }
+            Ok(None)
+        });
+    }
+
+    let mut entries: Vec<OutdatedEntry> = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(Some(entry))) => entries.push(entry),
+            Ok(Err(e)) => return Err(e),
+            Ok(Ok(None)) => {}
+            Err(e) => return Err(miette::miette!("Background task failed: {}", e)),
         }
     }
 
@@ -107,7 +133,7 @@ pub async fn outdated(project_root: &Path, opts: &OutdatedOptions) -> miette::Re
 /// Collect direct dependencies with their section label for display.
 fn collect_declared_deps_with_section(
     manifest: &Manifest,
-) -> Vec<(String, String, String, &'static str)> {
+) -> Vec<(String, String, String, String)> {
     use kargo_core::dependency::{Dependency, MavenCoordinate};
 
     let mut declared = Vec::new();
@@ -127,32 +153,29 @@ fn collect_declared_deps_with_section(
 
     for dep in manifest.dependencies.values() {
         if let Some((g, a, v)) = extract(dep) {
-            declared.push((g, a, v, "dependencies"));
+            declared.push((g, a, v, "dependencies".to_string()));
         }
     }
     for dep in manifest.dev_dependencies.values() {
         if let Some((g, a, v)) = extract(dep) {
-            declared.push((g, a, v, "dev-dependencies"));
+            declared.push((g, a, v, "dev-dependencies".to_string()));
         }
     }
     for (target_name, target_deps) in &manifest.target {
         for dep in target_deps.dependencies.values() {
             if let Some((g, a, v)) = extract(dep) {
-                // Leak target name for the static str — bounded by manifest entries
-                let label: &'static str =
-                    Box::leak(format!("target.{target_name}").into_boxed_str());
-                declared.push((g, a, v, label));
+                declared.push((g, a, v, format!("target.{target_name}")));
             }
         }
     }
     for dep in manifest.ksp.values() {
         if let Some((g, a, v)) = extract(dep) {
-            declared.push((g, a, v, "ksp"));
+            declared.push((g, a, v, "ksp".to_string()));
         }
     }
     for dep in manifest.kapt.values() {
         if let Some((g, a, v)) = extract(dep) {
-            declared.push((g, a, v, "kapt"));
+            declared.push((g, a, v, "kapt".to_string()));
         }
     }
 

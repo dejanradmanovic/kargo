@@ -469,7 +469,12 @@ fn flatten_jdk_dir(dir: &Path) -> miette::Result<()> {
                 }
             })
             .map_err(KargoError::Io)?;
-            let _ = fs::remove_dir_all(&tmp);
+            if let Err(e) = fs::remove_dir_all(&tmp) {
+                tracing::warn!(
+                    "Failed to remove temporary JDK flatten directory {}: {e}",
+                    tmp.display()
+                );
+            }
         }
     }
     Ok(())

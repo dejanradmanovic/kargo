@@ -8,6 +8,7 @@
 //! - [`run_main_compilation`] — fingerprinting, incremental check, kotlinc + javac
 //! - [`package_output`] — resource copy, JAR packaging
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -54,6 +55,10 @@ pub struct BuildResult {
     pub lockfile: Lockfile,
     /// Preflight result (toolchain info) for reuse.
     pub preflight: crate::ops_setup::PreflightResult,
+    /// Assembled classpath for reuse by run/test.
+    pub classpath: kargo_compiler::classpath::Classpath,
+    /// Discovered source sets for reuse by test.
+    pub discovered: kargo_compiler::source_set_discovery::DiscoveredSources,
 }
 
 /// Output from the compilation phase.
@@ -63,7 +68,7 @@ struct CompilationOutput {
 }
 
 /// Run the full build pipeline.
-pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildResult> {
+pub async fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildResult> {
     let start = Instant::now();
     use kargo_util::progress::status;
 
@@ -72,7 +77,8 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
         opts.target.as_deref(),
         opts.profile.as_deref(),
         opts.release,
-    )?;
+    )
+    .await?;
 
     if opts.verbose {
         ops_setup::print_preflight_summary(&ctx.preflight);
@@ -111,6 +117,8 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
             manifest: ctx.manifest,
             lockfile: ctx.lockfile,
             preflight: ctx.preflight,
+            classpath: ctx.classpath,
+            discovered: ctx.discovered,
         });
     }
 
@@ -128,16 +136,11 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
         &all_kotlin_dirs,
         &cache,
         opts,
-    )?;
+    )
+    .await?;
 
     // Phase 2: Main compilation
-    let comp_output = run_main_compilation(
-        &ctx,
-        &processors,
-        &main_sources,
-        &cache,
-        opts,
-    )?;
+    let comp_output = run_main_compilation(&ctx, &processors, &main_sources, &cache, opts)?;
 
     if !comp_output.compiled && !comp_output.main_unit.sources.is_empty() {
         // Check for failed build
@@ -192,6 +195,8 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
         manifest: ctx.manifest,
         lockfile: ctx.lockfile,
         preflight: ctx.preflight,
+        classpath: ctx.classpath,
+        discovered: ctx.discovered,
     })
 }
 
@@ -199,7 +204,7 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
 // Phase 1: Annotation processing (KSP/KAPT)
 // ---------------------------------------------------------------------------
 
-fn run_annotation_processing(
+async fn run_annotation_processing(
     ctx: &crate::BuildContext,
     processors: &[plugins::ProcessorInfo],
     main_sources: &[PathBuf],
@@ -215,7 +220,7 @@ fn run_annotation_processing(
 
     let ap_fp_dir =
         fingerprint::storage_dir(&ctx.project_dir, ctx.target.kebab_name(), &ctx.profile_name);
-    let ap_needed = annotation_processing_needed(
+    let decision = annotation_processing_decision(
         main_sources,
         processors,
         cache,
@@ -224,17 +229,18 @@ fn run_annotation_processing(
         &ap_fp_dir,
     );
 
-    if !ap_needed {
-        if opts.verbose {
-            println!("  annotation processing: up-to-date (skipped)");
+    let changed_files = match decision {
+        ApDecision::UpToDate => {
+            if opts.verbose {
+                println!("  annotation processing: up-to-date (skipped)");
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
+        ApDecision::FullRun => None,
+        ApDecision::Incremental(files) => Some(files),
+    };
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
-        message: format!("Failed to create async runtime: {e}"),
-    })?;
-    rt.block_on(plugins::ensure_processor_jars(processors, cache))?;
+    plugins::ensure_processor_jars(processors, cache).await?;
 
     // KSP pre-build
     let has_ksp = processors
@@ -243,45 +249,46 @@ fn run_annotation_processing(
 
     if has_ksp {
         let ksp_version = plugins::resolve_ksp_version(&ctx.manifest);
-        let ksp_toolchain = rt.block_on(plugins::ensure_ksp_toolchain(cache, &ksp_version))?;
+        let ksp_toolchain = plugins::ensure_ksp_toolchain(cache, &ksp_version).await?;
 
         if let Some(ref ksp) = ksp_toolchain {
+            let ksp_ap = plugins::ApContext {
+                processors,
+                cache,
+                sources: all_kotlin_dirs,
+                library_jars: &ctx.classpath.compile_jars,
+                processor_scope_jars: &ctx.classpath.processor_jars,
+                kotlin_home: &ctx.preflight.toolchain.home,
+                jdk_home: &ctx.preflight.jdk.home,
+                project_dir: &ctx.project_dir,
+                generated_dir: &ctx.generated_dir,
+            };
+
             match ksp {
                 plugins::KspToolchain::Ksp2 { .. } => {
                     let ran = plugins::run_ksp2_standalone(
                         ksp,
-                        processors,
-                        cache,
-                        all_kotlin_dirs,
-                        &ctx.classpath.compile_jars,
-                        &ctx.classpath.processor_jars,
-                        &ctx.preflight.toolchain.home,
-                        &ctx.preflight.jdk.home,
+                        &ksp_ap,
                         &ctx.preflight.java_target,
-                        &ctx.project_dir,
-                        &ctx.generated_dir,
                         &ctx.manifest.package.name,
                         &ctx.manifest.ksp_options,
+                        changed_files.as_deref(),
                     )?;
+                    let mode = if changed_files.is_some() {
+                        "KSP2 annotation processing (incremental)"
+                    } else {
+                        "KSP2 annotation processing"
+                    };
                     if ran && !opts.quiet {
-                        status("Running", "KSP2 annotation processing");
+                        status("Running", mode);
                     }
                 }
                 plugins::KspToolchain::Ksp1 { .. } => {
-                    run_ksp1_pass(
-                        ksp,
-                        processors,
-                        cache,
-                        main_sources,
-                        &ctx.classpath.compile_jars,
-                        &ctx.classpath.processor_jars,
-                        &ctx.preflight.toolchain.home,
-                        &ctx.preflight.jdk.home,
-                        &ctx.project_dir,
-                        &ctx.generated_dir,
-                        &ctx.profile,
-                        &ctx.manifest.ksp_options,
-                    )?;
+                    let ksp1_ap = plugins::ApContext {
+                        sources: main_sources,
+                        ..ksp_ap
+                    };
+                    run_ksp1_pass(ksp, &ksp1_ap, &ctx.profile, &ctx.manifest.ksp_options)?;
                     if !opts.quiet {
                         status("Running", "KSP1 annotation processing");
                     }
@@ -290,28 +297,36 @@ fn run_annotation_processing(
         }
     }
 
-    // KAPT pre-build
+    // KAPT pre-build (no incremental support — always full pass)
     let has_kapt = processors
         .iter()
         .any(|p| p.kind == plugins::ProcessorKind::Kapt);
 
     if has_kapt {
-        let generated = plugins::run_kapt_pass(
+        let kapt_ap = plugins::ApContext {
             processors,
             cache,
-            main_sources,
-            &ctx.classpath.compile_jars,
-            &ctx.classpath.processor_jars,
-            &ctx.preflight.toolchain.home,
-            &ctx.generated_dir,
-            &ctx.profile,
-        )?;
+            sources: main_sources,
+            library_jars: &ctx.classpath.compile_jars,
+            processor_scope_jars: &ctx.classpath.processor_jars,
+            kotlin_home: &ctx.preflight.toolchain.home,
+            jdk_home: &ctx.preflight.jdk.home,
+            project_dir: &ctx.project_dir,
+            generated_dir: &ctx.generated_dir,
+        };
+        let generated = plugins::run_kapt_pass(&kapt_ap, &ctx.profile)?;
         if generated && !opts.quiet {
             status("Running", "KAPT annotation processing");
         }
     }
 
-    mark_annotation_processing_done(main_sources, processors, cache, &ctx.project_dir, &ap_fp_dir);
+    mark_annotation_processing_done(
+        main_sources,
+        processors,
+        cache,
+        &ctx.project_dir,
+        &ap_fp_dir,
+    );
     Ok(())
 }
 
@@ -341,7 +356,11 @@ fn run_main_compilation(
     }
 
     let mut compiler_args = ctx.profile.compiler_args.clone();
-    detect_compiler_plugins(&ctx.lockfile, &ctx.preflight.toolchain.home, &mut compiler_args);
+    detect_compiler_plugins(
+        &ctx.lockfile,
+        &ctx.preflight.toolchain.home,
+        &mut compiler_args,
+    );
 
     let kapt_sources_dir = ctx.generated_dir.join("kapt").join("sources");
     let has_kapt_java = kapt_sources_dir.is_dir() && plugins::walkdir_has_java(&kapt_sources_dir);
@@ -351,10 +370,14 @@ fn run_main_compilation(
         .filter_map(|p| cache.get_jar(&p.group, &p.artifact, &p.version, None))
         .collect();
 
+    let (gen_dirs, gen_files) = collect_generated_sources(&ctx.generated_dir);
+    let mut all_main_sources = main_sources.to_vec();
+    all_main_sources.extend(gen_files);
+
     let main_unit = CompilationUnit {
         name: "main".into(),
         target: ctx.target,
-        sources: main_sources.to_vec(),
+        sources: all_main_sources,
         resource_dirs: ctx
             .discovered
             .main_sources
@@ -365,7 +388,7 @@ fn run_main_compilation(
         output_dir: ctx.classes_dir.clone(),
         compiler_args,
         is_test: false,
-        generated_sources: vec![ctx.generated_dir.clone()],
+        generated_sources: gen_dirs,
         processor_jars: processor_jar_paths,
     };
 
@@ -441,10 +464,7 @@ fn run_main_compilation(
 // Phase 3: Package output
 // ---------------------------------------------------------------------------
 
-fn package_output(
-    ctx: &crate::BuildContext,
-    compiled: bool,
-) -> miette::Result<Option<PathBuf>> {
+fn package_output(ctx: &crate::BuildContext, compiled: bool) -> miette::Result<Option<PathBuf>> {
     // Copy resources
     let resource_dirs: Vec<PathBuf> = ctx
         .discovered
@@ -487,24 +507,16 @@ fn package_output(
 // BuildConfig generation
 // ---------------------------------------------------------------------------
 
-fn generate_build_config(
-    ctx: &crate::BuildContext,
-    profile_name: &str,
-) -> miette::Result<PathBuf> {
+fn generate_build_config(ctx: &crate::BuildContext, profile_name: &str) -> miette::Result<PathBuf> {
     let is_debug = ctx.profile.debug.unwrap_or(profile_name != "release");
 
-    let kotlin_package = ctx
-        .manifest
-        .package
-        .group
-        .clone()
-        .or_else(|| {
-            ctx.manifest
-                .package
-                .main_class
-                .as_deref()
-                .and_then(kargo_compiler::buildconfig::package_from_main_class)
-        });
+    let kotlin_package = ctx.manifest.package.group.clone().or_else(|| {
+        ctx.manifest
+            .package
+            .main_class
+            .as_deref()
+            .and_then(kargo_compiler::buildconfig::package_from_main_class)
+    });
 
     let mut build_config_fields = ctx.manifest.build_config.clone();
     if let Some(ref flavors) = ctx.manifest.flavors {
@@ -554,10 +566,16 @@ fn copy_dir_contents(src: &Path, dst: &Path) {
         let path = entry.path();
         let dest = dst.join(entry.file_name());
         if path.is_dir() {
-            let _ = std::fs::create_dir_all(&dest);
+            if let Err(e) = std::fs::create_dir_all(&dest) {
+                tracing::warn!("Failed to create directory {}: {e}", dest.display());
+            }
             copy_dir_contents(&path, &dest);
-        } else {
-            let _ = std::fs::copy(&path, &dest);
+        } else if let Err(e) = std::fs::copy(&path, &dest) {
+            tracing::warn!(
+                "Failed to copy {} to {}: {e}",
+                path.display(),
+                dest.display()
+            );
         }
     }
 }
@@ -648,35 +666,27 @@ pub fn detect_compiler_plugins(
 /// Run KSP1 as a separate `kotlinc` pass with `-Xplugin`.
 fn run_ksp1_pass(
     ksp: &plugins::KspToolchain,
-    processors: &[plugins::ProcessorInfo],
-    cache: &kargo_maven::cache::LocalCache,
-    sources: &[PathBuf],
-    library_jars: &[PathBuf],
-    processor_scope_jars: &[PathBuf],
-    kotlin_home: &Path,
-    _jdk_home: &Path,
-    project_dir: &Path,
-    generated_dir: &Path,
+    ap: &plugins::ApContext<'_>,
     profile: &kargo_core::profile::Profile,
     ksp_options: &std::collections::BTreeMap<String, String>,
 ) -> miette::Result<()> {
     let ksp_args = plugins::build_ksp1_args(
-        processors,
-        cache,
+        ap.processors,
+        ap.cache,
         ksp,
-        processor_scope_jars,
-        generated_dir,
-        project_dir,
+        ap.processor_scope_jars,
+        ap.generated_dir,
+        ap.project_dir,
         ksp_options,
     );
     if ksp_args.is_empty() {
         return Ok(());
     }
 
-    let ksp_classes = generated_dir.join("ksp").join("ksp1_classes");
+    let ksp_classes = ap.generated_dir.join("ksp").join("ksp1_classes");
     std::fs::create_dir_all(&ksp_classes).map_err(KargoError::Io)?;
 
-    let kotlinc = kotlin_home.join("bin").join("kotlinc");
+    let kotlinc = ap.kotlin_home.join("bin").join("kotlinc");
     let mut cmd = kargo_util::process::CommandBuilder::new(kotlinc.to_string_lossy().to_string());
 
     for arg in &ksp_args {
@@ -688,21 +698,22 @@ fn run_ksp1_pass(
             cmd = cmd.arg(arg);
         }
     }
-    let serial_plugin = kotlin_home
+    let serial_plugin = ap
+        .kotlin_home
         .join("lib")
         .join("kotlinx-serialization-compiler-plugin.jar");
     if serial_plugin.is_file() {
         cmd = cmd.arg(format!("-Xplugin={}", serial_plugin.to_string_lossy()));
     }
 
-    if !library_jars.is_empty() {
-        let cp = crate::classpath_string_with_stdlib(library_jars, kotlin_home);
+    if !ap.library_jars.is_empty() {
+        let cp = crate::classpath_string_with_stdlib(ap.library_jars, ap.kotlin_home);
         cmd = cmd.arg("-classpath").arg(&cp);
     }
 
     cmd = cmd.arg("-d").arg(ksp_classes.to_string_lossy().to_string());
 
-    for src in sources {
+    for src in ap.sources {
         if !plugins::references_generated_imports(src) {
             cmd = cmd.arg(src.to_string_lossy().to_string());
         }
@@ -722,7 +733,12 @@ fn run_ksp1_pass(
         }
     }
 
-    let _ = std::fs::remove_dir_all(&ksp_classes);
+    if let Err(e) = std::fs::remove_dir_all(&ksp_classes) {
+        tracing::warn!(
+            "Failed to remove KSP classes directory {}: {e}",
+            ksp_classes.display()
+        );
+    }
 
     Ok(())
 }
@@ -816,8 +832,54 @@ fn print_diagnostics(diagnostics: &[kargo_compiler::unit::Diagnostic]) {
     }
 }
 
+/// Collect generated source directories and individual files for compilation.
+/// Returns `(directories, individual_files)`.
+///
+/// Only includes specific known output directories (ksp/kotlin, ksp/java,
+/// kapt/sources) to avoid recursing into KSP2 internal directories
+/// (caches, backups) that would cause duplicate declarations.
+fn collect_generated_sources(generated_dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+
+    let ksp_kotlin = generated_dir.join("ksp").join("kotlin");
+    if ksp_kotlin.is_dir() {
+        dirs.push(ksp_kotlin);
+    }
+    let ksp_java = generated_dir.join("ksp").join("java");
+    if ksp_java.is_dir() {
+        dirs.push(ksp_java);
+    }
+
+    let kapt_sources = generated_dir.join("kapt").join("sources");
+    if kapt_sources.is_dir() {
+        dirs.push(kapt_sources);
+    }
+
+    // Top-level files (e.g., BuildConfig.kt) — added individually to avoid
+    // recursing into the entire generated_dir.
+    if let Ok(entries) = std::fs::read_dir(generated_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext == "kt" || ext == "java")
+            {
+                files.push(path);
+            }
+        }
+    }
+
+    if dirs.is_empty() && files.is_empty() {
+        dirs.push(generated_dir.to_path_buf());
+    }
+
+    (dirs, files)
+}
+
 // ---------------------------------------------------------------------------
-// Annotation processing mtime-based skip logic
+// Annotation processing: two-tier skip logic (mtime + content fingerprint)
 // ---------------------------------------------------------------------------
 
 fn ap_inputs_max_mtime(
@@ -850,17 +912,142 @@ fn ap_inputs_max_mtime(
     max
 }
 
-fn annotation_processing_needed(
+/// Per-file content hashes for AP inputs plus a composite fingerprint.
+struct ApFingerprint {
+    composite: String,
+    file_hashes: HashMap<String, String>,
+}
+
+/// Content-based fingerprint of all AP inputs: source file contents,
+/// processor JAR filenames, and Kargo.toml contents.
+fn ap_inputs_fingerprint(
+    sources: &[PathBuf],
+    processors: &[plugins::ProcessorInfo],
+    cache: &kargo_maven::cache::LocalCache,
+    project_dir: &Path,
+) -> ApFingerprint {
+    use kargo_util::hash::sha256_bytes;
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut file_hashes: HashMap<String, String> = HashMap::new();
+
+    let mut sorted_sources: Vec<&PathBuf> = sources.iter().collect();
+    sorted_sources.sort();
+    for src in sorted_sources {
+        if let Ok(content) = std::fs::read(src) {
+            let h = sha256_bytes(&content);
+            let key = src.to_string_lossy().to_string();
+            parts.push(format!("src:{key}:{h}"));
+            file_hashes.insert(key, h);
+        }
+    }
+
+    let mut proc_entries: Vec<String> = processors
+        .iter()
+        .filter_map(|p| {
+            cache
+                .get_jar(&p.group, &p.artifact, &p.version, None)
+                .and_then(|jar| jar.file_name().map(|f| f.to_string_lossy().to_string()))
+        })
+        .collect();
+    proc_entries.sort();
+    for jar in &proc_entries {
+        parts.push(format!("proc:{jar}"));
+    }
+
+    let manifest_path = project_dir.join("Kargo.toml");
+    if let Ok(content) = std::fs::read(&manifest_path) {
+        let h = sha256_bytes(&content);
+        parts.push(format!("manifest:{h}"));
+    }
+
+    let combined = parts.join("\n");
+    ApFingerprint {
+        composite: sha256_bytes(combined.as_bytes()),
+        file_hashes,
+    }
+}
+
+fn load_ap_file_hashes(fp_dir: &Path) -> HashMap<String, String> {
+    let path = fp_dir.join("ap.file_hashes");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let (path_str, hash) = line.split_once('\t')?;
+            Some((path_str.to_string(), hash.to_string()))
+        })
+        .collect()
+}
+
+fn save_ap_file_hashes(fp_dir: &Path, hashes: &HashMap<String, String>) {
+    let path = fp_dir.join("ap.file_hashes");
+    let mut entries: Vec<(&str, &str)> = hashes
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    entries.sort_by_key(|(k, _)| *k);
+    let content: String = entries
+        .iter()
+        .map(|(k, v)| format!("{k}\t{v}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Err(e) = std::fs::write(&path, &content) {
+        tracing::warn!("Failed to write AP file hashes {}: {e}", path.display());
+    }
+}
+
+/// Compute which source files changed compared to the stored per-file hashes.
+/// Returns `None` if there are no stored hashes (first build / clean).
+fn compute_changed_sources(
+    sources: &[PathBuf],
+    current_hashes: &HashMap<String, String>,
+    fp_dir: &Path,
+) -> Option<Vec<PathBuf>> {
+    let stored = load_ap_file_hashes(fp_dir);
+    if stored.is_empty() {
+        return None;
+    }
+
+    let mut changed = Vec::new();
+    for src in sources {
+        let key = src.to_string_lossy().to_string();
+        let current = current_hashes.get(&key);
+        let previous = stored.get(&key);
+        match (current, previous) {
+            (Some(c), Some(p)) if c == p => {} // unchanged
+            _ => changed.push(src.clone()),    // new, removed, or changed
+        }
+    }
+
+    // Also detect removed files (in stored but not in current)
+    for stored_key in stored.keys() {
+        if !current_hashes.contains_key(stored_key) {
+            changed.push(PathBuf::from(stored_key));
+        }
+    }
+
+    Some(changed)
+}
+
+/// Result of the AP skip check: either skip entirely, run a full pass, or
+/// run an incremental pass with a list of changed source files.
+enum ApDecision {
+    UpToDate,
+    FullRun,
+    Incremental(Vec<PathBuf>),
+}
+
+fn annotation_processing_decision(
     sources: &[PathBuf],
     processors: &[plugins::ProcessorInfo],
     cache: &kargo_maven::cache::LocalCache,
     project_dir: &Path,
     generated_dir: &Path,
     fp_dir: &Path,
-) -> bool {
-    // Check if the processor-specific output dirs exist. The top-level
-    // generated_dir may contain BuildConfig.kt (written before AP runs),
-    // so we must check for actual AP output: kapt/sources or ksp/kotlin.
+) -> ApDecision {
     let has_kapt = processors
         .iter()
         .any(|p| p.kind == plugins::ProcessorKind::Kapt);
@@ -875,20 +1062,50 @@ fn annotation_processing_needed(
         || (has_ksp && ksp_output.is_dir() && !dir_is_empty(&ksp_output));
 
     if !ap_output_exists {
-        return true;
+        return ApDecision::FullRun;
     }
 
-    let marker = fp_dir.join("ap.mtime");
-    let stored: u64 = std::fs::read_to_string(&marker)
+    // Fast path: mtime comparison + source count check.
+    // File removal doesn't increase max mtime, so we also compare the number
+    // of source files against the stored per-file hash count.
+    let mtime_marker = fp_dir.join("ap.mtime");
+    let stored_mtime: u64 = std::fs::read_to_string(&mtime_marker)
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    if stored == 0 {
-        return true;
+    if stored_mtime == 0 {
+        return ApDecision::FullRun;
     }
 
-    let current = ap_inputs_max_mtime(sources, processors, cache, project_dir);
-    current > stored
+    let stored_file_count = load_ap_file_hashes(fp_dir).len();
+    let current_mtime = ap_inputs_max_mtime(sources, processors, cache, project_dir);
+    if current_mtime <= stored_mtime && sources.len() == stored_file_count {
+        return ApDecision::UpToDate;
+    }
+
+    // Slow path: mtime changed, but check if content actually changed.
+    let fp_marker = fp_dir.join("ap.fingerprint");
+    let stored_fp = std::fs::read_to_string(&fp_marker)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    if stored_fp.is_empty() {
+        return ApDecision::FullRun;
+    }
+
+    let current = ap_inputs_fingerprint(sources, processors, cache, project_dir);
+    if current.composite == stored_fp {
+        let _ = std::fs::write(&mtime_marker, current_mtime.to_string());
+        return ApDecision::UpToDate;
+    }
+
+    // Content changed — compute which specific files changed for KSP2 incremental
+    match compute_changed_sources(sources, &current.file_hashes, fp_dir) {
+        Some(changed) if !changed.is_empty() => ApDecision::Incremental(changed),
+        Some(_) => ApDecision::FullRun, // hashes exist but diff is empty (shouldn't happen)
+        None => ApDecision::FullRun,    // no stored hashes — first build
+    }
 }
 
 fn mark_annotation_processing_done(
@@ -898,12 +1115,33 @@ fn mark_annotation_processing_done(
     project_dir: &Path,
     fp_dir: &Path,
 ) {
-    let current = ap_inputs_max_mtime(sources, processors, cache, project_dir);
-    let marker = fp_dir.join("ap.mtime");
-    if let Some(parent) = marker.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Err(e) = std::fs::create_dir_all(fp_dir) {
+        tracing::warn!(
+            "Failed to create fingerprint directory {}: {e}",
+            fp_dir.display()
+        );
+        return;
     }
-    let _ = std::fs::write(&marker, current.to_string());
+
+    let current_mtime = ap_inputs_max_mtime(sources, processors, cache, project_dir);
+    let mtime_marker = fp_dir.join("ap.mtime");
+    if let Err(e) = std::fs::write(&mtime_marker, current_mtime.to_string()) {
+        tracing::warn!(
+            "Failed to write AP mtime marker {}: {e}",
+            mtime_marker.display()
+        );
+    }
+
+    let current = ap_inputs_fingerprint(sources, processors, cache, project_dir);
+    let fp_marker = fp_dir.join("ap.fingerprint");
+    if let Err(e) = std::fs::write(&fp_marker, &current.composite) {
+        tracing::warn!(
+            "Failed to write AP fingerprint {}: {e}",
+            fp_marker.display()
+        );
+    }
+
+    save_ap_file_hashes(fp_dir, &current.file_hashes);
 }
 
 fn dir_is_empty(dir: &Path) -> bool {

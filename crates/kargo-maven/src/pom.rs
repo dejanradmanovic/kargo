@@ -99,6 +99,11 @@ impl Pom {
             }
             result = new;
         }
+        if iterations >= 20 && result.contains("${") {
+            tracing::warn!(
+                "POM property interpolation hit 20-iteration limit; possible cycle in properties"
+            );
+        }
         result
     }
 

@@ -4,7 +4,7 @@ use miette::Result;
 
 use kargo_ops::ops_audit::{self, AuditOptions};
 
-pub fn exec(fail_on: Option<String>) -> Result<()> {
+pub async fn exec(fail_on: Option<String>) -> Result<()> {
     let project_root = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
 
     if !project_root.join("Kargo.toml").is_file() {
@@ -14,18 +14,12 @@ pub fn exec(fail_on: Option<String>) -> Result<()> {
         .into());
     }
 
-    // Load audit config from Kargo.toml if present
     let manifest_path = project_root.join("Kargo.toml");
     let ignore = load_audit_ignore(&manifest_path);
 
     let opts = AuditOptions { fail_on, ignore };
 
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| kargo_util::errors::KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-
-    rt.block_on(ops_audit::audit(&project_root, &opts))
+    ops_audit::audit(&project_root, &opts).await
 }
 
 /// Read `[audit] ignore = [...]` from Kargo.toml if present.
