@@ -173,12 +173,17 @@ fn flatten_single_child(dir: &Path) -> miette::Result<()> {
 
     if entries.len() == 1 && entries[0].path().is_dir() {
         let child = entries[0].path();
-        let tmp_name = dir.with_file_name(format!(
-            ".kargo-flatten-{}",
-            dir.file_name().unwrap().to_string_lossy()
-        ));
+        let dir_name = dir
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new("archive"))
+            .to_string_lossy();
+        let tmp_name = dir.with_file_name(format!(".kargo-flatten-{dir_name}"));
         fs::rename(dir, &tmp_name).map_err(KargoError::Io)?;
-        fs::rename(tmp_name.join(child.file_name().unwrap()), dir).map_err(KargoError::Io)?;
+        let child_name = match child.file_name() {
+            Some(n) => n.to_os_string(),
+            None => return Ok(()),
+        };
+        fs::rename(tmp_name.join(child_name), dir).map_err(KargoError::Io)?;
         fs::remove_dir_all(&tmp_name).map_err(KargoError::Io)?;
     }
     Ok(())

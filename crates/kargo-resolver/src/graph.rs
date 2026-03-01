@@ -126,36 +126,47 @@ impl DependencyGraph {
 
         let mut compile_deps: Vec<(NodeIndex, &DepEdge)> = Vec::new();
         let mut test_deps: Vec<(NodeIndex, &DepEdge)> = Vec::new();
+        let mut ksp_deps: Vec<(NodeIndex, &DepEdge)> = Vec::new();
+        let mut kapt_deps: Vec<(NodeIndex, &DepEdge)> = Vec::new();
 
         for (idx, edge) in &deps {
-            if edge.scope == "test" {
-                test_deps.push((*idx, edge));
-            } else {
-                compile_deps.push((*idx, edge));
+            match edge.scope.as_str() {
+                "test" => test_deps.push((*idx, edge)),
+                "ksp" => ksp_deps.push((*idx, edge)),
+                "kapt" => kapt_deps.push((*idx, edge)),
+                _ => compile_deps.push((*idx, edge)),
             }
         }
 
-        let has_both = !compile_deps.is_empty() && !test_deps.is_empty();
+        let has_non_compile = !test_deps.is_empty() || !ksp_deps.is_empty() || !kapt_deps.is_empty();
+        let section_count = [&compile_deps, &test_deps, &ksp_deps, &kapt_deps]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .count();
+        let show_headers = section_count > 1 || has_non_compile;
         let mut visited = HashSet::new();
         visited.insert(root);
 
-        if has_both && !compile_deps.is_empty() {
-            output.push_str("[dependencies]\n");
-        }
-        let is_last_section = test_deps.is_empty();
-        let count = compile_deps.len();
-        for (i, (idx, _edge)) in compile_deps.iter().enumerate() {
-            let is_last = i == count - 1 && is_last_section;
-            self.print_subtree(&mut output, *idx, "", is_last, 1, max_depth, &mut visited);
-        }
+        let mut sections_printed = 0usize;
+        let total_sections = section_count;
 
-        if !test_deps.is_empty() {
-            if has_both {
-                output.push_str("[dev-dependencies]\n");
+        for (label, deps_list) in [
+            ("[dependencies]", &compile_deps),
+            ("[dev-dependencies]", &test_deps),
+            ("[ksp]", &ksp_deps),
+            ("[kapt]", &kapt_deps),
+        ] {
+            if deps_list.is_empty() {
+                continue;
             }
-            let count = test_deps.len();
-            for (i, (idx, _edge)) in test_deps.iter().enumerate() {
-                let is_last = i == count - 1;
+            sections_printed += 1;
+            if show_headers {
+                output.push_str(&format!("{label}\n"));
+            }
+            let is_last_section = sections_printed == total_sections;
+            let count = deps_list.len();
+            for (i, (idx, _edge)) in deps_list.iter().enumerate() {
+                let is_last = i == count - 1 && is_last_section;
                 self.print_subtree(&mut output, *idx, "", is_last, 1, max_depth, &mut visited);
             }
         }

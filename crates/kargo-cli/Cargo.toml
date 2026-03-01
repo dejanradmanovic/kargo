@@ -13,10 +13,12 @@ path = "src/main.rs"
 [dependencies]
 kargo-ops.workspace = true
 kargo-core.workspace = true
+kargo-compiler.workspace = true
 kargo-util.workspace = true
 clap.workspace = true
 toml.workspace = true
 tokio.workspace = true
+notify.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 miette.workspace = true

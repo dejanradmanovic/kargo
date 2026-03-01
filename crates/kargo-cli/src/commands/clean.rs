@@ -1,6 +1,8 @@
-use miette::Result;
-use std::fs;
+//! Clean command implementation.
 
+use miette::Result;
+
+use kargo_ops::ops_clean::{self, CleanResult};
 use kargo_util::errors::KargoError;
 use kargo_util::fs::find_ancestor_with;
 
@@ -11,21 +13,11 @@ pub fn exec(variant: Option<&str>) -> Result<()> {
             message: "Could not find Kargo.toml in current or parent directories".to_string(),
         })?;
 
-    let build_dir = project_root.join("build");
-
-    if let Some(variant_name) = variant {
-        let variant_dir = build_dir.join("variants").join(variant_name);
-        if variant_dir.exists() {
-            fs::remove_dir_all(&variant_dir).map_err(KargoError::Io)?;
-            println!("Cleaned variant '{}'", variant_name);
-        } else {
-            println!("Variant '{}' build directory does not exist", variant_name);
-        }
-    } else if build_dir.exists() {
-        fs::remove_dir_all(&build_dir).map_err(KargoError::Io)?;
-        println!("Cleaned build directory");
-    } else {
-        println!("Nothing to clean");
+    match ops_clean::clean(&project_root, variant)? {
+        CleanResult::AllCleaned => println!("Cleaned build directory"),
+        CleanResult::VariantCleaned(v) => println!("Cleaned variant '{v}'"),
+        CleanResult::VariantNotFound(v) => println!("Variant '{v}' build directory does not exist"),
+        CleanResult::NothingToClean => println!("Nothing to clean"),
     }
 
     Ok(())

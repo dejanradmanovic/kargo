@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use kargo_core::lockfile::{Lockfile, ResolvedPackageInfo};
 use kargo_core::manifest::Manifest;
@@ -9,10 +10,16 @@ use kargo_maven::cache::LocalCache;
 use kargo_maven::download;
 use kargo_resolver::resolver::{self, ResolutionResult};
 use kargo_util::hash::sha256_bytes;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 
 /// Fetch all dependencies: resolve, download artifacts to the project cache,
 /// and update the lockfile.
 pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
+    use kargo_util::progress::{spinner, status};
+
     let manifest_path = project_root.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
     let repos = resolver::build_repos(&manifest);
@@ -25,9 +32,11 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
         None
     };
 
+    let sp = spinner("Resolving dependencies...");
     let client = download::build_client()?;
     let result =
         resolver::resolve(&manifest, &repos, &cache, existing_lock.as_ref(), &client).await?;
+    sp.finish_and_clear();
 
     if !result.conflicts.is_empty() && verbose {
         eprintln!("{}", result.conflicts);
@@ -38,12 +47,13 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let mut up_to_date = 0u32;
     let mut checksums: HashMap<String, String> = HashMap::new();
 
+    // Separate cached artifacts from those needing download
+    let mut to_download = Vec::new();
     for artifact in &result.artifacts {
         let coord_key = format!(
             "{}:{}:{}",
             artifact.group, artifact.artifact, artifact.version
         );
-
         if let Some(jar_path) =
             cache.get_jar(&artifact.group, &artifact.artifact, &artifact.version, None)
         {
@@ -51,46 +61,121 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
             if let Ok(data) = std::fs::read(&jar_path) {
                 checksums.insert(coord_key, sha256_bytes(&data));
             }
-            continue;
-        }
-
-        let mut found = false;
-        for repo in &repos {
-            let url = repo.jar_url(&artifact.group, &artifact.artifact, &artifact.version, None);
-            let label = format!("{}:{}", artifact.artifact, artifact.version);
-            match download::download_artifact(&client, repo, &url, &label).await? {
-                Some(data) => {
-                    kargo_maven::checksum::verify(&client, repo, &url, &data).await?;
-                    checksums.insert(coord_key.clone(), sha256_bytes(&data));
-                    cache.put_jar(
-                        &artifact.group,
-                        &artifact.artifact,
-                        &artifact.version,
-                        None,
-                        &data,
-                    )?;
-                    downloaded += 1;
-                    found = true;
-                    break;
-                }
-                None => continue,
-            }
-        }
-
-        if !found && verbose {
-            eprintln!(
-                "  Warning: JAR not found for {}:{}:{}",
-                artifact.group, artifact.artifact, artifact.version
-            );
+        } else {
+            to_download.push((artifact, coord_key));
         }
     }
 
-    // Prune stale artifacts no longer in the resolved set
-    let keep: std::collections::HashSet<(String, String, String)> = result
+    let dl_sp = spinner(&format!("Downloading {artifact_count} dependencies..."));
+    if !to_download.is_empty() {
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
+        let mut join_set = JoinSet::new();
+
+        for (artifact, coord_key) in &to_download {
+            let sem = semaphore.clone();
+            let client = client.clone();
+            let repos = repos.clone();
+            let group = artifact.group.clone();
+            let artifact_name = artifact.artifact.clone();
+            let version = artifact.version.clone();
+            let coord_key = coord_key.clone();
+            let cache_root = cache.root().to_path_buf();
+
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await;
+                let local_cache = LocalCache::from_root(cache_root);
+                for repo in &repos {
+                    let url = repo.jar_url(&group, &artifact_name, &version, None);
+                    let label = format!("{artifact_name}:{version}");
+                    match download::download_artifact(&client, repo, &url, &label).await {
+                        Ok(Some(data)) => {
+                            if let Err(e) =
+                                kargo_maven::checksum::verify(&client, repo, &url, &data).await
+                            {
+                                return Err(e);
+                            }
+                            let checksum = sha256_bytes(&data);
+                            local_cache.put_jar(&group, &artifact_name, &version, None, &data)?;
+                            return Ok(Some((coord_key, checksum)));
+                        }
+                        Ok(None) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(None)
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(Some((coord_key, checksum)))) => {
+                    checksums.insert(coord_key, checksum);
+                    downloaded += 1;
+                }
+                Ok(Ok(None)) => {
+                    // Not found in any repo (warning handled below)
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(kargo_util::errors::KargoError::Generic {
+                        message: format!("Download task failed: {e}"),
+                    }
+                    .into())
+                }
+            }
+        }
+
+        // Report warnings for artifacts not found
+        if verbose {
+            let downloaded_keys: std::collections::HashSet<_> = checksums.keys().collect();
+            for (artifact, coord_key) in &to_download {
+                if !downloaded_keys.contains(coord_key) {
+                    kargo_util::progress::status_warn(
+                        "Warning",
+                        &format!(
+                            "JAR not found for {}:{}:{}",
+                            artifact.group, artifact.artifact, artifact.version
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    dl_sp.finish_and_clear();
+
+    // Prune stale artifacts no longer in the resolved set.
+    // Also protect auto-provisioned JARs (KSP toolchain, JUnit runner) that
+    // are downloaded outside the normal resolve→fetch cycle.
+    let mut keep: std::collections::HashSet<(String, String, String)> = result
         .artifacts
         .iter()
         .map(|a| (a.group.clone(), a.artifact.clone(), a.version.clone()))
         .collect();
+
+    // JUnit platform (auto-provisioned by `kargo test`)
+    let has_kotlin_test = manifest.dev_dependencies.values().any(|dep| {
+        let coord = match dep {
+            kargo_core::dependency::Dependency::Short(s) => s.as_str(),
+            kargo_core::dependency::Dependency::Detailed(d) => d.artifact.as_str(),
+            kargo_core::dependency::Dependency::Catalog(c) => c.catalog.as_str(),
+        };
+        coord.contains("kotlin-test") || coord.contains("junit")
+    });
+    if has_kotlin_test {
+        keep.insert((
+            crate::ops_test::JUNIT_PLATFORM_GROUP.into(),
+            crate::ops_test::JUNIT_PLATFORM_STANDALONE.into(),
+            crate::ops_test::JUNIT_PLATFORM_VERSION.into(),
+        ));
+    }
+
+    // KSP toolchain JARs (auto-provisioned by annotation processing)
+    if let Some(ref ksp_ver) = manifest.package.ksp_version {
+        for coord in kargo_compiler::plugins::auto_provisioned_ksp_jars(ksp_ver, &cache) {
+            keep.insert(coord);
+        }
+    }
+
     let pruned = cache.prune(&keep);
 
     let lock_packages = resolution_to_lockfile_packages(&result, &checksums);
@@ -98,12 +183,15 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     lockfile.write_to(&lockfile_path)?;
 
     if downloaded > 0 || pruned > 0 || verbose {
-        eprintln!(
-            "Resolved {artifact_count} dependencies, downloaded {downloaded}, \
-             {up_to_date} up-to-date, {pruned} pruned"
+        status(
+            "Fetched",
+            &format!(
+                "{artifact_count} dependencies, {downloaded} downloaded, \
+                 {up_to_date} up-to-date, {pruned} pruned"
+            ),
         );
     } else if artifact_count > 0 {
-        eprintln!("All {artifact_count} dependencies up-to-date");
+        status("Fetched", &format!("all {artifact_count} dependencies up-to-date"));
     }
 
     Ok(())
@@ -157,8 +245,9 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
     }
 
     if mismatches.is_empty() {
-        eprintln!(
-            "Verified {verified} checksums ({skipped} skipped, no cached JAR or no checksum)"
+        kargo_util::progress::status(
+            "Verified",
+            &format!("{verified} checksums ({skipped} skipped, no cached JAR or no checksum)"),
         );
         Ok(())
     } else {
@@ -167,7 +256,7 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
         Err(kargo_util::errors::KargoError::Generic {
             message: format!(
                 "{count} checksum mismatch(es) detected:\n{details}\n\n\
-                 Cached JARs may be corrupted. Delete .kargo/cache and run `kargo fetch`."
+                 Cached JARs may be corrupted. Delete .kargo/dependencies and run `kargo fetch`."
             ),
         }
         .into())
@@ -208,6 +297,18 @@ pub fn collect_declared_deps(manifest: &Manifest) -> Vec<(String, String, String
             if let Some(t) = extract(dep) {
                 declared.push(t);
             }
+        }
+    }
+
+    // Include KSP and KAPT processor dependencies
+    for dep in manifest.ksp.values() {
+        if let Some(t) = extract(dep) {
+            declared.push(t);
+        }
+    }
+    for dep in manifest.kapt.values() {
+        if let Some(t) = extract(dep) {
+            declared.push(t);
         }
     }
 

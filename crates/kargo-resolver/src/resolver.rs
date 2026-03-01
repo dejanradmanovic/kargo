@@ -2,6 +2,7 @@
 //! exclusions, optional dependency handling, and BOM imports.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use kargo_core::dependency::{Dependency, MavenCoordinate};
 use kargo_core::lockfile::Lockfile;
@@ -10,9 +11,13 @@ use kargo_maven::cache::LocalCache;
 use kargo_maven::pom::Pom;
 use kargo_maven::repository::MavenRepository;
 use reqwest::Client;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::conflict::{ConflictReport, VersionConflict};
 use crate::graph::{DepEdge, DependencyGraph, ResolvedNode};
+
+const MAX_CONCURRENT_FETCHES: usize = 8;
 
 /// The output of dependency resolution.
 pub struct ResolutionResult {
@@ -70,7 +75,7 @@ pub async fn resolve(
     let mut conflicts = ConflictReport::new();
 
     let root = graph.add_node(ResolvedNode {
-        group: String::new(),
+        group: manifest.package.group.clone().unwrap_or_default(),
         artifact: manifest.package.name.clone(),
         version: manifest.package.version.clone(),
         scope: "compile".to_string(),
@@ -95,6 +100,18 @@ pub async fn resolve(
             if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
                 direct_deps.push((coord, "compile".to_string()));
             }
+        }
+    }
+    // KSP processor deps — build-time only, excluded from runtime classpath
+    for (name, dep) in &manifest.ksp {
+        if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
+            direct_deps.push((coord, "ksp".to_string()));
+        }
+    }
+    // KAPT processor deps — build-time only, excluded from runtime classpath
+    for (name, dep) in &manifest.kapt {
+        if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
+            direct_deps.push((coord, "kapt".to_string()));
         }
     }
 
@@ -130,48 +147,101 @@ pub async fn resolve(
         });
     }
 
-    while let Some(entry) = queue.pop_front() {
-        let key = format!("{}:{}", entry.group, entry.artifact);
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES));
 
-        // Track all requested versions for conflict reporting
-        version_requests
-            .entry(key.clone())
-            .or_default()
-            .insert(entry.version.clone());
+    while !queue.is_empty() {
+        // Drain the current depth level from the front of the queue
+        let current_depth = queue.front().map(|e| e.depth).unwrap_or(0);
+        let mut level: Vec<QueueEntry> = Vec::new();
+        while queue.front().is_some_and(|e| e.depth == current_depth) {
+            level.push(queue.pop_front().unwrap());
+        }
 
-        // Nearest wins: if already resolved at same or lesser depth, skip
-        if let Some((existing_ver, existing_depth)) = resolved.get(&key) {
-            if *existing_depth <= entry.depth {
-                if *existing_ver != entry.version {
-                    conflicts.add(VersionConflict {
-                        group: entry.group.clone(),
-                        artifact: entry.artifact.clone(),
-                        requested: entry.version.clone(),
-                        resolved: existing_ver.clone(),
-                        reason: format!(
-                            "nearest wins (depth {} vs {})",
-                            existing_depth, entry.depth
-                        ),
-                    });
+        // Prefetch POMs for this level in parallel
+        let coords_to_fetch: Vec<(String, String, String)> = level
+            .iter()
+            .map(|e| (e.group.clone(), e.artifact.clone(), e.version.clone()))
+            .filter(|(g, a, v)| {
+                let k = format!("{g}:{a}:{v}");
+                !pom_cache.contains_key(&k)
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !coords_to_fetch.is_empty() {
+            let mut join_set = JoinSet::new();
+            for (group, artifact, version) in coords_to_fetch {
+                let client = client.clone();
+                let repos = repos.to_vec();
+                let cache_root = cache.root().to_path_buf();
+                let sem = semaphore.clone();
+                join_set.spawn(async move {
+                    let _permit = sem.acquire().await;
+                    let local_cache = LocalCache::from_root(cache_root);
+                    let result =
+                        fetch_pom_from_repos(&client, &repos, &local_cache, &group, &artifact, &version)
+                            .await;
+                    (format!("{group}:{artifact}:{version}"), result)
+                });
+            }
+            while let Some(result) = join_set.join_next().await {
+                if let Ok((coord_key, Ok(Some(pom)))) = result {
+                    pom_cache.insert(coord_key, pom);
                 }
-                continue;
             }
         }
 
-        resolved.insert(key.clone(), (entry.version.clone(), entry.depth));
+        // Process entries at this depth level
+        for entry in level {
+            let key = format!("{}:{}", entry.group, entry.artifact);
 
-        let node = graph.add_node(ResolvedNode {
-            group: entry.group.clone(),
-            artifact: entry.artifact.clone(),
-            version: entry.version.clone(),
-            scope: entry.scope.clone(),
-        });
+            version_requests
+                .entry(key.clone())
+                .or_default()
+                .insert(entry.version.clone());
 
-        // Connect to parent or root
-        if let Some(ref parent_key) = entry.parent_key {
-            if let Some(parent_idx) = graph.find(parent_key) {
+            if let Some((existing_ver, existing_depth)) = resolved.get(&key) {
+                if *existing_depth <= entry.depth {
+                    if *existing_ver != entry.version {
+                        conflicts.add(VersionConflict {
+                            group: entry.group.clone(),
+                            artifact: entry.artifact.clone(),
+                            requested: entry.version.clone(),
+                            resolved: existing_ver.clone(),
+                            reason: format!(
+                                "nearest wins (depth {} vs {})",
+                                existing_depth, entry.depth
+                            ),
+                        });
+                    }
+                    continue;
+                }
+            }
+
+            resolved.insert(key.clone(), (entry.version.clone(), entry.depth));
+
+            let node = graph.add_node(ResolvedNode {
+                group: entry.group.clone(),
+                artifact: entry.artifact.clone(),
+                version: entry.version.clone(),
+                scope: entry.scope.clone(),
+            });
+
+            if let Some(ref parent_key) = entry.parent_key {
+                if let Some(parent_idx) = graph.find(parent_key) {
+                    graph.add_edge(
+                        parent_idx,
+                        node,
+                        DepEdge {
+                            scope: entry.scope.clone(),
+                            optional: false,
+                        },
+                    );
+                }
+            } else {
                 graph.add_edge(
-                    parent_idx,
+                    root,
                     node,
                     DepEdge {
                         scope: entry.scope.clone(),
@@ -179,98 +249,71 @@ pub async fn resolve(
                     },
                 );
             }
-        } else {
-            graph.add_edge(
-                root,
-                node,
-                DepEdge {
-                    scope: entry.scope.clone(),
-                    optional: false,
-                },
-            );
-        }
 
-        // Fetch and parse POM for transitive dependencies
-        let coord_key = format!("{}:{}:{}", entry.group, entry.artifact, entry.version);
-        let pom = if let Some(cached) = pom_cache.get(&coord_key) {
-            Some(cached.clone())
-        } else {
-            let fetched = fetch_pom_from_repos(
-                client,
-                repos,
-                cache,
-                &entry.group,
-                &entry.artifact,
-                &entry.version,
-            )
-            .await?;
-            if let Some(ref p) = fetched {
-                pom_cache.insert(coord_key, p.clone());
-            }
-            fetched
-        };
+            let coord_key = format!("{}:{}:{}", entry.group, entry.artifact, entry.version);
+            let pom = pom_cache.get(&coord_key).cloned();
 
-        if let Some(mut pom) = pom {
-            pom.resolve_properties();
+            if let Some(mut pom) = pom {
+                pom.resolve_properties();
 
-            // Process transitive dependencies
-            for dep in &pom.dependencies {
-                if dep.optional {
-                    continue;
-                }
-                let dep_scope = dep.scope.as_deref().unwrap_or("compile");
-                if dep_scope == "test" || dep_scope == "provided" || dep_scope == "system" {
-                    continue;
-                }
-
-                let dep_key = format!("{}:{}", dep.group_id, dep.artifact_id);
-
-                // Check exclusions
-                if entry.exclusions.contains(&dep_key) || entry.exclusions.contains(&dep.group_id) {
-                    continue;
-                }
-
-                let version = dep
-                    .version
-                    .clone()
-                    .or_else(|| {
-                        pom.managed_version(&dep.group_id, &dep.artifact_id)
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_default();
-
-                if version.is_empty() {
-                    continue;
-                }
-
-                // For transitive deps not directly declared, prefer locked version
-                let dep_key = format!("{}:{}", dep.group_id, dep.artifact_id);
-                let version = if !direct_keys.contains(&dep_key) {
-                    locked_versions.get(&dep_key).cloned().unwrap_or(version)
-                } else {
-                    version
-                };
-
-                let propagated_scope = propagate_scope(&entry.scope, dep_scope);
-
-                let mut child_exclusions = entry.exclusions.clone();
-                for excl in &dep.exclusions {
-                    if let Some(ref art) = excl.artifact_id {
-                        child_exclusions.insert(format!("{}:{}", excl.group_id, art));
-                    } else {
-                        child_exclusions.insert(excl.group_id.clone());
+                for dep in &pom.dependencies {
+                    if dep.optional {
+                        continue;
                     }
-                }
+                    let dep_scope = dep.scope.as_deref().unwrap_or("compile");
+                    if dep_scope == "test" || dep_scope == "provided" || dep_scope == "system" {
+                        continue;
+                    }
 
-                queue.push_back(QueueEntry {
-                    group: dep.group_id.clone(),
-                    artifact: dep.artifact_id.clone(),
-                    version,
-                    scope: propagated_scope,
-                    depth: entry.depth + 1,
-                    parent_key: Some(key.clone()),
-                    exclusions: child_exclusions,
-                });
+                    let dep_key = format!("{}:{}", dep.group_id, dep.artifact_id);
+
+                    if entry.exclusions.contains(&dep_key)
+                        || entry.exclusions.contains(&dep.group_id)
+                    {
+                        continue;
+                    }
+
+                    let version = dep
+                        .version
+                        .clone()
+                        .or_else(|| {
+                            pom.managed_version(&dep.group_id, &dep.artifact_id)
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default();
+
+                    if version.is_empty() {
+                        continue;
+                    }
+
+                    let dep_key = format!("{}:{}", dep.group_id, dep.artifact_id);
+                    let version = if !direct_keys.contains(&dep_key) {
+                        locked_versions.get(&dep_key).cloned().unwrap_or(version)
+                    } else {
+                        version
+                    };
+
+                    let propagated_scope = propagate_scope(&entry.scope, dep_scope);
+
+                    let mut child_exclusions = entry.exclusions.clone();
+                    for excl in &dep.exclusions {
+                        if let Some(ref art) = excl.artifact_id {
+                            child_exclusions.insert(format!("{}:{}", excl.group_id, art));
+                        } else {
+                            child_exclusions.insert(excl.group_id.clone());
+                        }
+                    }
+
+                    queue.push_back(QueueEntry {
+                        group: dep.group_id.clone(),
+                        artifact: dep.artifact_id.clone(),
+                        version,
+                        scope: propagated_scope,
+                        depth: entry.depth + 1,
+                        parent_key: Some(key.clone()),
+                        exclusions: child_exclusions,
+                    });
+                }
             }
         }
     }
@@ -411,6 +454,8 @@ async fn fetch_pom_from_repos(
 }
 
 /// Maven scope propagation rules.
+/// Processor scopes (`ksp`, `kapt`) propagate like `test`: all transitive
+/// deps inherit the processor scope so they stay out of the runtime classpath.
 fn propagate_scope(parent_scope: &str, dep_scope: &str) -> String {
     match (parent_scope, dep_scope) {
         ("compile", "compile") => "compile",
@@ -419,6 +464,8 @@ fn propagate_scope(parent_scope: &str, dep_scope: &str) -> String {
         ("runtime", "runtime") => "runtime",
         ("test", _) => "test",
         (_, "test") => "test",
+        ("ksp", _) => "ksp",
+        ("kapt", _) => "kapt",
         (_, "provided") => "provided",
         _ => "compile",
     }
@@ -435,8 +482,12 @@ fn build_artifact_list(
     for node in graph.all_nodes() {
         let source = repos.first().map(|r| r.url.clone()).unwrap_or_default();
 
+        let node_idx = match graph.find(&node.key()) {
+            Some(idx) => idx,
+            None => continue,
+        };
         let deps: Vec<ArtifactRef> = graph
-            .dependencies_of(graph.find(&node.key()).expect("node must be in graph"))
+            .dependencies_of(node_idx)
             .iter()
             .map(|(idx, _)| {
                 let child = graph.node(*idx);

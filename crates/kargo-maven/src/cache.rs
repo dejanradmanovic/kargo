@@ -6,18 +6,23 @@ use std::path::{Path, PathBuf};
 use crate::pom::{self, Pom};
 use crate::repository::MavenRepository;
 
-/// Project-local Maven artifact cache at `<project>/.kargo/cache/`.
+/// Project-local Maven artifact cache at `<project>/.kargo/dependencies/`.
 #[derive(Debug, Clone)]
 pub struct LocalCache {
     root: PathBuf,
 }
 
 impl LocalCache {
-    /// Create a cache rooted at `project_root/.kargo/cache/`.
+    /// Create a cache rooted at `project_root/.kargo/dependencies/`.
     pub fn new(project_root: &Path) -> Self {
         Self {
-            root: project_root.join(".kargo").join("cache"),
+            root: project_root.join(".kargo").join("dependencies"),
         }
+    }
+
+    /// Create a cache from an already-resolved root path.
+    pub fn from_root(root: PathBuf) -> Self {
+        Self { root }
     }
 
     /// The root directory of this cache.
@@ -26,7 +31,7 @@ impl LocalCache {
     }
 
     /// Path within the cache for a given Maven coordinate.
-    fn artifact_dir(&self, group: &str, artifact: &str, version: &str) -> PathBuf {
+    pub fn artifact_dir(&self, group: &str, artifact: &str, version: &str) -> PathBuf {
         self.root
             .join(group.replace('.', "/"))
             .join(artifact)
@@ -188,8 +193,22 @@ fn collect_version_dirs(
             // This is a version dir: reconstruct group:artifact:version from path
             if let Some(coord) = reconstruct_coordinate(root, &path) {
                 if !keep.contains(&coord) {
-                    let _ = fs::remove_dir_all(&path);
-                    *removed += 1;
+                    // Only prune if the directory has a JAR (not just a POM).
+                    // The resolver caches POM files for versions that don't
+                    // win "nearest wins"; those POM-only dirs are harmless.
+                    let has_jar = fs::read_dir(&path)
+                        .map(|rd| {
+                            rd.flatten().any(|e| {
+                                e.path()
+                                    .extension()
+                                    .is_some_and(|ext| ext == "jar")
+                            })
+                        })
+                        .unwrap_or(false);
+                    if has_jar {
+                        let _ = fs::remove_dir_all(&path);
+                        *removed += 1;
+                    }
                 }
             }
         } else {
@@ -300,9 +319,9 @@ mod tests {
             )
             .unwrap();
 
-        let expected = tmp
-            .path()
-            .join(".kargo/cache/org/jetbrains/kotlin/kotlin-stdlib/2.3.0/kotlin-stdlib-2.3.0.jar");
+        let expected = tmp.path().join(
+            ".kargo/dependencies/org/jetbrains/kotlin/kotlin-stdlib/2.3.0/kotlin-stdlib-2.3.0.jar",
+        );
         assert!(expected.is_file());
     }
 

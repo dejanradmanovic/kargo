@@ -1,0 +1,22 @@
+[package]
+name = "kapt-sample"
+group = "com.example"
+version = "0.1.0"
+kotlin = "2.3.0"
+description = "A JVM sample showcasing KAPT with Dagger 2 dependency injection"
+main-class = "com.example.MainKt"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+dagger = "com.google.dagger:dagger:2.59.2"
+javax-inject = "javax.inject:javax.inject:1"
+
+[kapt]
+dagger-compiler = "com.google.dagger:dagger-compiler:2.59.2"
+# Required for Kotlin 2.3.0 compatibility (Dagger 2.57+ unshaded kotlinx-metadata)
+kotlin-metadata-jvm = "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.0"
+
+[dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"

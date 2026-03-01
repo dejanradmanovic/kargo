@@ -34,6 +34,7 @@ pub async fn update(project_root: &Path, opts: &UpdateOptions) -> miette::Result
     let manifest_path = project_root.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
     let repos = resolver::build_repos(&manifest);
+    let sp = kargo_util::progress::spinner("Checking for updates...");
     let client = download::build_client()?;
 
     let mut declared = collect_updatable_deps(&manifest);
@@ -87,8 +88,10 @@ pub async fn update(project_root: &Path, opts: &UpdateOptions) -> miette::Result
         }
     }
 
+    sp.finish_and_clear();
+
     if updates.is_empty() {
-        eprintln!("All dependencies are already at the latest compatible version.");
+        kargo_util::progress::status("Updated", "all dependencies at latest compatible version");
         return Ok(());
     }
 

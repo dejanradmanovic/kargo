@@ -68,12 +68,34 @@ pub struct Manifest {
 
     #[serde(default, rename = "package.docker")]
     pub docker: Option<DockerConfig>,
+
+    #[serde(default)]
+    pub ksp: BTreeMap<String, Dependency>,
+
+    #[serde(default, rename = "ksp-options")]
+    pub ksp_options: BTreeMap<String, String>,
+
+    #[serde(default)]
+    pub kapt: BTreeMap<String, Dependency>,
+
+    #[serde(default, rename = "kapt-options")]
+    pub kapt_options: BTreeMap<String, String>,
+
+    /// Custom compile-time constants from `[build-config]`.
+    ///
+    /// These are merged with flavor build-config and emitted as
+    /// `const val` fields in the generated `BuildConfig` object.
+    /// Values support `${env:VAR}` interpolation (resolved at load time).
+    #[serde(default, rename = "build-config")]
+    pub build_config: BTreeMap<String, String>,
 }
 
 /// Package identity and metadata from the `[package]` section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageMetadata {
     pub name: String,
+    #[serde(default)]
+    pub group: Option<String>,
     pub version: String,
     pub kotlin: String,
     #[serde(default)]
@@ -84,6 +106,10 @@ pub struct PackageMetadata {
     pub license: Option<String>,
     #[serde(default)]
     pub repository: Option<String>,
+    #[serde(default, rename = "main-class")]
+    pub main_class: Option<String>,
+    #[serde(default, rename = "ksp-version")]
+    pub ksp_version: Option<String>,
 }
 
 /// Compose Multiplatform configuration from `[compose]`.
@@ -263,7 +289,9 @@ impl Manifest {
             crate::properties::load_env_file(&dir.join(".kargo.env")).unwrap_or_default();
         let resolved = crate::properties::interpolate(&content, &env_vars);
 
-        Self::parse_toml(&resolved)
+        let manifest = Self::parse_toml(&resolved)?;
+        manifest.validate()?;
+        Ok(manifest)
     }
 
     /// Parse a `Kargo.toml` from a string (no interpolation).
@@ -275,4 +303,93 @@ impl Manifest {
             .into()
         })
     }
+
+    /// Validate semantic constraints that TOML deserialization cannot enforce.
+    pub fn validate(&self) -> miette::Result<()> {
+        use kargo_util::errors::KargoError;
+        let err = |msg: String| -> miette::Report { KargoError::Manifest { message: msg }.into() };
+
+        // name: non-empty, valid identifier chars
+        if self.package.name.is_empty() {
+            return Err(err("package.name must not be empty".into()));
+        }
+        if !self
+            .package
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(err(format!(
+                "package.name '{}' contains invalid characters (allowed: alphanumeric, '-', '_')",
+                self.package.name
+            )));
+        }
+
+        // version: valid semver
+        if semver::Version::parse(&self.package.version).is_err() {
+            return Err(err(format!(
+                "package.version '{}' is not valid semver (expected e.g. 1.0.0)",
+                self.package.version
+            )));
+        }
+
+        // kotlin: major.minor or major.minor.patch
+        if !is_valid_kotlin_version(&self.package.kotlin) {
+            return Err(err(format!(
+                "package.kotlin '{}' is not a valid version (expected e.g. 2.3.0 or 2.3)",
+                self.package.kotlin
+            )));
+        }
+
+        // group: if present, valid Maven group (dot-separated identifiers)
+        if let Some(ref group) = self.package.group {
+            if group.is_empty()
+                || !group
+                    .split('.')
+                    .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'))
+            {
+                return Err(err(format!(
+                    "package.group '{}' is not a valid Maven group ID (expected dot-separated identifiers)",
+                    group
+                )));
+            }
+        }
+
+        // repository: if present, valid URL
+        if let Some(ref repo) = self.package.repository {
+            if !repo.starts_with("http://") && !repo.starts_with("https://") {
+                return Err(err(format!(
+                    "package.repository '{}' must start with http:// or https://",
+                    repo
+                )));
+            }
+        }
+
+        // Duplicate dependency detection across sections
+        let mut seen = std::collections::HashSet::new();
+        let sections: &[(&str, &BTreeMap<String, Dependency>)] = &[
+            ("dependencies", &self.dependencies),
+            ("dev-dependencies", &self.dev_dependencies),
+            ("ksp", &self.ksp),
+            ("kapt", &self.kapt),
+        ];
+        for (section, deps) in sections {
+            for key in deps.keys() {
+                if !seen.insert(key.clone()) {
+                    return Err(err(format!(
+                        "duplicate dependency '{}' found in [{}] (already declared in another section)",
+                        key, section
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn is_valid_kotlin_version(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    matches!(parts.len(), 2 | 3)
+        && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }

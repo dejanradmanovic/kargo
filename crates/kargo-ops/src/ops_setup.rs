@@ -35,7 +35,13 @@ pub struct PreflightResult {
 /// prompt the user for JDK/SDK installation — those must already be present.
 pub fn preflight(project_dir: &Path) -> miette::Result<PreflightResult> {
     let manifest = load_manifest(project_dir)?;
-    let config = GlobalConfig::load().unwrap_or_default();
+    let config = match GlobalConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to load global config, using defaults: {e}");
+            GlobalConfig::default()
+        }
+    };
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
     // 1. Kotlin compiler
@@ -185,7 +191,13 @@ pub fn post_scaffold(project_dir: &Path) {
         return;
     }
 
-    let config = GlobalConfig::load().unwrap_or_default();
+    let config = match GlobalConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to load global config, using defaults: {e}");
+            GlobalConfig::default()
+        }
+    };
     let mirror = config.toolchain.kotlin_mirror.as_deref();
 
     setup_kotlin(&manifest_path, &config, mirror);
@@ -383,7 +395,11 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
     let manifest_path = project_dir.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
 
-    if manifest.dependencies.is_empty() && manifest.dev_dependencies.is_empty() {
+    if manifest.dependencies.is_empty()
+        && manifest.dev_dependencies.is_empty()
+        && manifest.ksp.is_empty()
+        && manifest.kapt.is_empty()
+    {
         return Ok(());
     }
 
@@ -392,7 +408,22 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
         match kargo_core::lockfile::Lockfile::from_path(&lockfile_path) {
             Ok(lf) => {
                 let declared = crate::ops_fetch::collect_declared_deps(&manifest);
-                !lf.is_up_to_date(&declared)
+                if !lf.is_up_to_date(&declared) {
+                    true
+                } else {
+                    // Lockfile is up-to-date, but check that cached JARs
+                    // actually exist. If any are missing, re-fetch.
+                    let cache = kargo_maven::cache::LocalCache::new(project_dir);
+                    lf.package.iter().any(|pkg| {
+                        let scope = pkg.scope.as_deref().unwrap_or("compile");
+                        if scope == "ksp" || scope == "kapt" {
+                            return false;
+                        }
+                        cache
+                            .get_jar(&pkg.group, &pkg.name, &pkg.version, None)
+                            .is_none()
+                    })
+                }
             }
             Err(_) => true,
         }

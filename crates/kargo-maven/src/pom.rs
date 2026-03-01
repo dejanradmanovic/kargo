@@ -271,7 +271,9 @@ pub fn parse_pom(xml: &str) -> miette::Result<Pom> {
                             _ => {}
                         }
                         if ctx.ends_with(">exclusion") {
-                            dep.exclusions.push(current_exclusion.take().unwrap());
+                            if let Some(excl) = current_exclusion.take() {
+                                dep.exclusions.push(excl);
+                            }
                         }
                     } else {
                         match path.last().map(|s| s.as_str()) {
@@ -303,11 +305,12 @@ pub fn parse_pom(xml: &str) -> miette::Result<Pom> {
                     if ctx == "project>dependencies>dependency"
                         || ctx == "project>dependencyManagement>dependencies>dependency"
                     {
-                        let dep = current_dep.take().unwrap();
-                        if in_dep_mgmt {
-                            pom.dependency_management.push(dep);
-                        } else {
-                            pom.dependencies.push(dep);
+                        if let Some(dep) = current_dep.take() {
+                            if in_dep_mgmt {
+                                pom.dependency_management.push(dep);
+                            } else {
+                                pom.dependencies.push(dep);
+                            }
                         }
                         in_dep_mgmt = false;
                     }
@@ -347,7 +350,9 @@ pub fn parse_pom(xml: &str) -> miette::Result<Pom> {
                         _ => {}
                     }
                     if ctx == "project>licenses>license" {
-                        pom.licenses.push(current_license.take().unwrap());
+                        if let Some(lic) = current_license.take() {
+                            pom.licenses.push(lic);
+                        }
                     }
                 }
 
