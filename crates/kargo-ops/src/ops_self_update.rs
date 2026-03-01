@@ -118,6 +118,30 @@ pub fn apply_update(info: &UpdateInfo) -> miette::Result<()> {
     println!("  Downloading Kargo {}...", info.latest);
     kargo_toolchain::download::download_file(&info.asset_url, &archive_path)?;
 
+    // Verify download checksum
+    let checksum_url = format!("{}.sha256", info.asset_url);
+    match reqwest::blocking::get(&checksum_url) {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(expected) = resp.text() {
+                let expected = expected.split_whitespace().next().unwrap_or("").to_string();
+                if !expected.is_empty() {
+                    let actual = kargo_util::hash::sha256_file(&archive_path)?;
+                    if actual != expected {
+                        return Err(KargoError::Generic {
+                            message: format!(
+                                "Checksum mismatch for downloaded update: expected {expected}, got {actual}"
+                            ),
+                        }
+                        .into());
+                    }
+                }
+            }
+        }
+        _ => {
+            tracing::warn!("Could not verify checksum for downloaded update");
+        }
+    }
+
     let new_binary = extract_binary(&archive_path, tmp_dir.path())?;
 
     replace_binary(&new_binary, &current_exe)?;
@@ -308,7 +332,9 @@ fn ls_dir(dir: &Path) -> String {
 fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     let backup = current_exe.with_extension("old");
 
-    let _ = fs::remove_file(&backup);
+    if let Err(e) = fs::remove_file(&backup) {
+        tracing::warn!("Failed to remove old backup file {}: {e}", backup.display());
+    }
 
     fs::rename(current_exe, &backup).map_err(|e| KargoError::Toolchain {
         message: format!(
@@ -319,7 +345,12 @@ fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     })?;
 
     fs::copy(new_binary, current_exe).map_err(|e| {
-        let _ = fs::rename(&backup, current_exe);
+        if let Err(revert_err) = fs::rename(&backup, current_exe) {
+            tracing::warn!(
+                "Failed to restore backup {}: {revert_err}",
+                backup.display()
+            );
+        }
         KargoError::Toolchain {
             message: format!(
                 "Failed to install new binary to {}: {e}",
@@ -331,10 +362,17 @@ fn replace_binary(new_binary: &Path, current_exe: &Path) -> miette::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(current_exe, fs::Permissions::from_mode(0o755));
+        if let Err(e) = fs::set_permissions(current_exe, fs::Permissions::from_mode(0o755)) {
+            tracing::warn!(
+                "Failed to set permissions on {}: {e}",
+                current_exe.display()
+            );
+        }
     }
 
-    let _ = fs::remove_file(&backup);
+    if let Err(e) = fs::remove_file(&backup) {
+        tracing::warn!("Failed to remove backup file {}: {e}", backup.display());
+    }
 
     Ok(())
 }

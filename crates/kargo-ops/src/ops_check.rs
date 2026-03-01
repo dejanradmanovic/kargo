@@ -13,8 +13,8 @@ use kargo_util::errors::KargoError;
 use crate::ops_setup;
 
 /// Type-check the project without producing output artifacts.
-pub fn check(project_dir: &Path, verbose: bool) -> miette::Result<()> {
-    let ctx = crate::BuildContext::load(project_dir, None, None, false)?;
+pub async fn check(project_dir: &Path, verbose: bool) -> miette::Result<()> {
+    let ctx = crate::BuildContext::load(project_dir, None, None, false).await?;
 
     if verbose {
         ops_setup::print_preflight_summary(&ctx.preflight);
@@ -23,7 +23,10 @@ pub fn check(project_dir: &Path, verbose: bool) -> miette::Result<()> {
 
     kargo_util::progress::status(
         "Checking",
-        &format!("{} v{}", ctx.manifest.package.name, ctx.manifest.package.version),
+        &format!(
+            "{} v{}",
+            ctx.manifest.package.name, ctx.manifest.package.version
+        ),
     );
 
     let mut all_kotlin_dirs: Vec<std::path::PathBuf> = Vec::new();

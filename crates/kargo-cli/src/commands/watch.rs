@@ -8,7 +8,6 @@
 //! trigger a single cycle.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::Duration;
 
 use miette::Result;
@@ -20,13 +19,13 @@ use kargo_util::errors::KargoError;
 
 const DEBOUNCE_MS: u64 = 300;
 
-pub fn exec(build_only: bool, verbose: bool) -> Result<()> {
+pub async fn exec(build_only: bool, verbose: bool) -> Result<()> {
     let cwd = std::env::current_dir().map_err(KargoError::Io)?;
     let mode = if build_only { "build" } else { "build + run" };
 
     let watch_paths = collect_watch_paths(&cwd)?;
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
             if is_relevant_event(&event) {
@@ -62,39 +61,40 @@ pub fn exec(build_only: bool, verbose: bool) -> Result<()> {
     }
 
     // Initial cycle
-    run_cycle(&cwd, build_only, verbose);
+    run_cycle(&cwd, build_only, verbose).await;
 
     // Watch loop
     loop {
-        match rx.recv() {
-            Ok(()) => {}
-            Err(_) => break,
+        match rx.recv().await {
+            Some(()) => {}
+            None => break,
         }
 
         // Debounce: drain additional events within the window
-        std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
+        tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
         while rx.try_recv().is_ok() {}
 
         eprint!("\x1B[2J\x1B[H");
         kargo_util::progress::status("Detected", "change, rebuilding...");
-        run_cycle(&cwd, build_only, verbose);
+        run_cycle(&cwd, build_only, verbose).await;
     }
 
     Ok(())
 }
 
-fn run_cycle(cwd: &Path, build_only: bool, verbose: bool) {
+async fn run_cycle(cwd: &Path, build_only: bool, verbose: bool) {
     let build_result = ops_build::build(
         cwd,
         &BuildOptions {
             verbose,
             ..Default::default()
         },
-    );
+    )
+    .await;
 
     match build_result {
         Ok(result) if result.success && !build_only => {
-            if let Err(e) = kargo_ops::ops_run::run(cwd, None, &[], verbose) {
+            if let Err(e) = kargo_ops::ops_run::run(cwd, None, &[], verbose).await {
                 kargo_util::progress::status_warn("Error", &format!("{e}"));
             }
             kargo_util::progress::status("Watching", "for changes...");
@@ -112,12 +112,10 @@ fn run_cycle(cwd: &Path, build_only: bool, verbose: bool) {
 /// Collect all paths that should be watched for changes.
 fn collect_watch_paths(project_dir: &Path) -> Result<Vec<PathBuf>> {
     let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;
-    let discovered =
-        kargo_compiler::source_set_discovery::discover(project_dir, &manifest);
+    let discovered = kargo_compiler::source_set_discovery::discover(project_dir, &manifest);
 
     let mut paths = Vec::new();
 
-    // Source and resource directories
     for ss in discovered
         .main_sources
         .iter()
@@ -135,22 +133,19 @@ fn collect_watch_paths(project_dir: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    // Manifest file
     let manifest_path = project_dir.join("Kargo.toml");
     if manifest_path.is_file() {
         paths.push(manifest_path);
     }
 
-    // Dedup (source sets may share roots)
     paths.sort();
     paths.dedup();
 
-    // Remove paths that are children of other watched paths
     let mut pruned = Vec::new();
     for path in &paths {
-        let is_child = pruned.iter().any(|parent: &PathBuf| {
-            path.starts_with(parent) && path != parent
-        });
+        let is_child = pruned
+            .iter()
+            .any(|parent: &PathBuf| path.starts_with(parent) && path != parent);
         if !is_child {
             pruned.push(path.clone());
         }
@@ -172,7 +167,6 @@ fn is_relevant_event(event: &notify::Event) -> bool {
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        // Skip build output, hidden files, and editor temps
         if name.starts_with('.') || name.ends_with('~') || name.ends_with(".swp") {
             return false;
         }
@@ -183,7 +177,9 @@ fn is_relevant_event(event: &notify::Event) -> bool {
             return false;
         }
 
-        matches!(ext, "kt" | "java" | "toml" | "properties" | "xml" | "json" | "yaml" | "yml")
-            || name == "Kargo.toml"
+        matches!(
+            ext,
+            "kt" | "java" | "toml" | "properties" | "xml" | "json" | "yaml" | "yml"
+        ) || name == "Kargo.toml"
     })
 }

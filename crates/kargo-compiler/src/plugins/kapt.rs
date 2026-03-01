@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use kargo_maven::cache::LocalCache;
 use kargo_util::errors::KargoError;
 
 use super::{ProcessorInfo, ProcessorKind};
@@ -14,16 +13,11 @@ const KAPT_PLUGIN_ID: &str = "org.jetbrains.kotlin.kapt3";
 /// generated code. The generated Java sources end up in `generated_dir/kapt/sources/`
 /// and are then included in the main compilation via `generated_source_dirs`.
 pub fn run_kapt_pass(
-    processors: &[ProcessorInfo],
-    cache: &LocalCache,
-    sources: &[PathBuf],
-    library_jars: &[PathBuf],
-    processor_scope_jars: &[PathBuf],
-    kotlin_home: &Path,
-    generated_dir: &Path,
+    ap: &super::ApContext<'_>,
     profile: &kargo_core::profile::Profile,
 ) -> miette::Result<bool> {
-    let kapt_procs: Vec<&ProcessorInfo> = processors
+    let kapt_procs: Vec<&ProcessorInfo> = ap
+        .processors
         .iter()
         .filter(|p| p.kind == ProcessorKind::Kapt)
         .collect();
@@ -34,14 +28,15 @@ pub fn run_kapt_pass(
 
     let proc_jars: Vec<PathBuf> = kapt_procs
         .iter()
-        .filter_map(|p| cache.get_jar(&p.group, &p.artifact, &p.version, None))
+        .filter_map(|p| ap.cache.get_jar(&p.group, &p.artifact, &p.version, None))
         .collect();
 
     if proc_jars.is_empty() {
         return Ok(false);
     }
 
-    let kapt_plugin_jar = kotlin_home
+    let kapt_plugin_jar = ap
+        .kotlin_home
         .join("lib")
         .join("kotlin-annotation-processing.jar");
     if !kapt_plugin_jar.is_file() {
@@ -52,12 +47,12 @@ pub fn run_kapt_pass(
     }
 
     let mut full_proc_cp = proc_jars;
-    for jar in processor_scope_jars {
+    for jar in ap.processor_scope_jars {
         if !full_proc_cp.contains(jar) {
             full_proc_cp.push(jar.clone());
         }
     }
-    for lib_jar in library_jars {
+    for lib_jar in ap.library_jars {
         if !full_proc_cp.contains(lib_jar) {
             full_proc_cp.push(lib_jar.clone());
         }
@@ -68,14 +63,16 @@ pub fn run_kapt_pass(
         .collect::<Vec<_>>()
         .join(if cfg!(windows) { ";" } else { ":" });
 
-    let generated_sources = generated_dir.join("kapt").join("sources");
-    let classes_dir = generated_dir.join("kapt").join("classes");
-    let stubs_dir = generated_dir.join("kapt").join("stubs");
+    let generated_sources = ap.generated_dir.join("kapt").join("sources");
+    let classes_dir = ap.generated_dir.join("kapt").join("classes");
+    let stubs_dir = ap.generated_dir.join("kapt").join("stubs");
     for dir in [&generated_sources, &classes_dir, &stubs_dir] {
-        let _ = std::fs::create_dir_all(dir);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!("Failed to create KAPT directory {}: {e}", dir.display());
+        }
     }
 
-    let kotlinc = kotlin_home.join("bin").join("kotlinc");
+    let kotlinc = ap.kotlin_home.join("bin").join("kotlinc");
     let mut cmd = kargo_util::process::CommandBuilder::new(kotlinc.to_string_lossy().to_string());
 
     cmd = cmd.arg(format!("-Xplugin={}", kapt_plugin_jar.to_string_lossy()));
@@ -100,9 +97,7 @@ pub fn run_kapt_pass(
     let processor_classes = discover_processor_classes(&full_proc_cp);
     if !processor_classes.is_empty() {
         let procs_str = processor_classes.join(",");
-        cmd = cmd.arg(format!(
-            "-P=plugin:{KAPT_PLUGIN_ID}:processors={procs_str}"
-        ));
+        cmd = cmd.arg(format!("-P=plugin:{KAPT_PLUGIN_ID}:processors={procs_str}"));
     }
 
     for arg in &profile.compiler_args {
@@ -111,25 +106,30 @@ pub fn run_kapt_pass(
         }
     }
 
-    let mut kapt_cp_jars: Vec<PathBuf> = library_jars.to_vec();
-    for jar in processor_scope_jars {
+    let mut kapt_cp_jars: Vec<PathBuf> = ap.library_jars.to_vec();
+    for jar in ap.processor_scope_jars {
         if !kapt_cp_jars.contains(jar) {
             kapt_cp_jars.push(jar.clone());
         }
     }
     if !kapt_cp_jars.is_empty() {
-        let cp = classpath_string_with_stdlib(&kapt_cp_jars, kotlin_home);
+        let cp = classpath_string_with_stdlib(&kapt_cp_jars, ap.kotlin_home);
         cmd = cmd.arg("-classpath").arg(&cp);
     }
 
-    let kapt_throwaway = generated_dir.join("kapt").join("kapt_classes");
-    let _ = std::fs::create_dir_all(&kapt_throwaway);
+    let kapt_throwaway = ap.generated_dir.join("kapt").join("kapt_classes");
+    if let Err(e) = std::fs::create_dir_all(&kapt_throwaway) {
+        tracing::warn!(
+            "Failed to create KAPT throwaway directory {}: {e}",
+            kapt_throwaway.display()
+        );
+    }
     cmd = cmd
         .arg("-d")
         .arg(kapt_throwaway.to_string_lossy().to_string());
 
     let mut added = 0;
-    for src in sources {
+    for src in ap.sources {
         if !references_generated_imports(src) {
             cmd = cmd.arg(src.to_string_lossy().to_string());
             added += 1;
@@ -165,8 +165,18 @@ pub fn run_kapt_pass(
         }
     }
 
-    let _ = std::fs::remove_dir_all(&kapt_throwaway);
-    let _ = std::fs::remove_dir_all(&stubs_dir);
+    if let Err(e) = std::fs::remove_dir_all(&kapt_throwaway) {
+        tracing::warn!(
+            "Failed to remove KAPT throwaway directory {}: {e}",
+            kapt_throwaway.display()
+        );
+    }
+    if let Err(e) = std::fs::remove_dir_all(&stubs_dir) {
+        tracing::warn!(
+            "Failed to remove KAPT stubs directory {}: {e}",
+            stubs_dir.display()
+        );
+    }
 
     let generated = generated_sources.is_dir() && walkdir_has_java(&generated_sources);
 

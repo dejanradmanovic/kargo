@@ -2,7 +2,7 @@
 
 use miette::Result;
 
-pub fn exec(verbose: bool) -> Result<()> {
+pub async fn exec(verbose: bool) -> Result<()> {
     let cwd = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
-    kargo_ops::ops_check::check(&cwd, verbose)
+    kargo_ops::ops_check::check(&cwd, verbose).await
 }

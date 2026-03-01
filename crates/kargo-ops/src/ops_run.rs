@@ -11,7 +11,7 @@ use kargo_util::errors::KargoError;
 use crate::ops_build::{self, BuildOptions};
 
 /// Run the project after building.
-pub fn run(
+pub async fn run(
     project_dir: &Path,
     target: Option<&str>,
     run_args: &[String],
@@ -25,7 +25,8 @@ pub fn run(
             quiet: true,
             ..Default::default()
         },
-    )?;
+    )
+    .await?;
 
     if !build_result.success {
         return Err(KargoError::Generic {
@@ -34,9 +35,7 @@ pub fn run(
         .into());
     }
 
-    // Reuse manifest, lockfile, and preflight from the build result
     let manifest = &build_result.manifest;
-    let lockfile = &build_result.lockfile;
     let preflight = &build_result.preflight;
 
     let main_class = manifest
@@ -50,7 +49,7 @@ pub fn run(
                 .into(),
         })?;
 
-    let cp = classpath::assemble(project_dir, lockfile);
+    let cp = &build_result.classpath;
     let mut cp_parts = vec![build_result.classes_dir.to_string_lossy().to_string()];
 
     let resources_dir = build_result.build_dir.join("resources");
@@ -125,7 +124,7 @@ fn detect_main_class(project_dir: &Path) -> Option<String> {
     for file in &files {
         if let Ok(content) = std::fs::read_to_string(file) {
             if content.contains("fun main(") || content.contains("fun main()") {
-                return derive_main_class(file, project_dir);
+                return derive_main_class(file, &content, project_dir);
             }
         }
     }
@@ -133,18 +132,20 @@ fn detect_main_class(project_dir: &Path) -> Option<String> {
     None
 }
 
-fn derive_main_class(file: &std::path::Path, project_dir: &std::path::Path) -> Option<String> {
-    if let Ok(content) = std::fs::read_to_string(file) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("package ") {
-                let pkg = trimmed
-                    .trim_start_matches("package ")
-                    .trim_end_matches(';')
-                    .trim();
-                let stem = file.file_stem()?.to_string_lossy();
-                return Some(format!("{pkg}.{stem}Kt"));
-            }
+fn derive_main_class(
+    file: &std::path::Path,
+    content: &str,
+    project_dir: &std::path::Path,
+) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("package ") {
+            let pkg = trimmed
+                .trim_start_matches("package ")
+                .trim_end_matches(';')
+                .trim();
+            let stem = file.file_stem()?.to_string_lossy();
+            return Some(format!("{pkg}.{stem}Kt"));
         }
     }
 

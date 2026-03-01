@@ -47,7 +47,27 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let mut up_to_date = 0u32;
     let mut checksums: HashMap<String, String> = HashMap::new();
 
-    // Separate cached artifacts from those needing download
+    // Build a map of known-good checksums from the existing lockfile
+    let existing_checksums: HashMap<String, String> = existing_lock
+        .as_ref()
+        .map(|lf| {
+            lf.package
+                .iter()
+                .filter_map(|pkg| {
+                    pkg.checksum.as_ref().map(|cs| {
+                        (
+                            format!("{}:{}:{}", pkg.group, pkg.name, pkg.version),
+                            cs.clone(),
+                        )
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Classify: cached (JAR exists on disk) vs. missing (needs download)
+    let mut cached_entries: Vec<(&resolver::ResolvedArtifact, String, std::path::PathBuf)> =
+        Vec::new();
     let mut to_download = Vec::new();
     for artifact in &result.artifacts {
         let coord_key = format!(
@@ -57,11 +77,47 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
         if let Some(jar_path) =
             cache.get_jar(&artifact.group, &artifact.artifact, &artifact.version, None)
         {
+            cached_entries.push((artifact, coord_key, jar_path));
+        } else {
+            to_download.push((artifact, coord_key));
+        }
+    }
+
+    // Compute checksums for cached JARs in parallel and verify against lockfile
+    let cached_results: Vec<(String, String, bool)> = std::thread::scope(|s| {
+        let handles: Vec<_> = cached_entries
+            .iter()
+            .map(|(_artifact, coord_key, jar_path)| {
+                let coord_key = coord_key.clone();
+                let jar_path = jar_path.clone();
+                let expected = existing_checksums.get(&coord_key).cloned();
+                s.spawn(move || {
+                    let actual = kargo_util::hash::sha256_file_streaming(&jar_path)
+                        .ok()
+                        .unwrap_or_default();
+                    let intact = match expected {
+                        Some(ref exp) if !exp.is_empty() => *exp == actual,
+                        _ => true, // no prior checksum to compare against
+                    };
+                    (coord_key, actual, intact)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    // Partition cached JARs: intact ones keep their checksums, corrupted ones
+    // get deleted and moved to the download queue.
+    for (i, (coord_key, hash, intact)) in cached_results.into_iter().enumerate() {
+        if intact {
             up_to_date += 1;
-            if let Ok(data) = std::fs::read(&jar_path) {
-                checksums.insert(coord_key, sha256_bytes(&data));
+            if !hash.is_empty() {
+                checksums.insert(coord_key, hash);
             }
         } else {
+            let (artifact, _, jar_path) = &cached_entries[i];
+            tracing::warn!("Cached JAR for {coord_key} has a checksum mismatch — re-downloading");
+            let _ = std::fs::remove_file(jar_path);
             to_download.push((artifact, coord_key));
         }
     }
@@ -89,11 +145,7 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
                     let label = format!("{artifact_name}:{version}");
                     match download::download_artifact(&client, repo, &url, &label).await {
                         Ok(Some(data)) => {
-                            if let Err(e) =
-                                kargo_maven::checksum::verify(&client, repo, &url, &data).await
-                            {
-                                return Err(e);
-                            }
+                            kargo_maven::checksum::verify(&client, repo, &url, &data).await?;
                             let checksum = sha256_bytes(&data);
                             local_cache.put_jar(&group, &artifact_name, &version, None, &data)?;
                             return Ok(Some((coord_key, checksum)));
@@ -191,7 +243,10 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
             ),
         );
     } else if artifact_count > 0 {
-        status("Fetched", &format!("all {artifact_count} dependencies up-to-date"));
+        status(
+            "Fetched",
+            &format!("all {artifact_count} dependencies up-to-date"),
+        );
     }
 
     Ok(())
@@ -204,13 +259,13 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
     let lockfile_path = project_root.join("Kargo.lock");
     let lockfile = Lockfile::from_path(&lockfile_path)?;
     let cache = LocalCache::new(project_root);
-    let mut mismatches: Vec<String> = Vec::new();
-    let mut verified = 0u32;
+
+    let mut tasks: Vec<(String, std::path::PathBuf, String)> = Vec::new();
     let mut skipped = 0u32;
 
     for pkg in &lockfile.package {
         let expected = match &pkg.checksum {
-            Some(c) if !c.is_empty() => c,
+            Some(c) if !c.is_empty() => c.clone(),
             _ => {
                 skipped += 1;
                 continue;
@@ -225,22 +280,47 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
             }
         };
 
-        let data =
-            std::fs::read(&jar_path).map_err(|e| kargo_util::errors::KargoError::Generic {
-                message: format!(
-                    "Failed to read cached JAR {}:{}:{}: {e}",
-                    pkg.group, pkg.name, pkg.version
-                ),
-            })?;
+        let key = format!("{}:{}:{}", pkg.group, pkg.name, pkg.version);
+        tasks.push((key, jar_path, expected));
+    }
 
-        let actual = sha256_bytes(&data);
-        if actual == *expected {
-            verified += 1;
-        } else {
-            mismatches.push(format!(
-                "{}:{}:{}\n  expected: {expected}\n  actual:   {actual}",
-                pkg.group, pkg.name, pkg.version
-            ));
+    // Verify JARs in parallel using streaming hashing
+    let results: Vec<Result<Option<String>, miette::Report>> = std::thread::scope(|s| {
+        let handles: Vec<_> = tasks
+            .iter()
+            .map(|(key, jar_path, expected)| {
+                let key = key.clone();
+                let jar_path = jar_path.clone();
+                let expected = expected.clone();
+                s.spawn(move || -> Result<Option<String>, miette::Report> {
+                    let actual =
+                        kargo_util::hash::sha256_file_streaming(&jar_path).map_err(|e| {
+                            kargo_util::errors::KargoError::Generic {
+                                message: format!("Failed to read cached JAR {key}: {e}"),
+                            }
+                        })?;
+                    if actual == expected {
+                        Ok(None)
+                    } else {
+                        Ok(Some(format!(
+                            "{key}\n  expected: {expected}\n  actual:   {actual}"
+                        )))
+                    }
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut verified = 0u32;
+
+    for result in results {
+        match result {
+            Ok(None) => verified += 1,
+            Ok(Some(msg)) => mismatches.push(msg),
+            Err(e) => return Err(e),
         }
     }
 

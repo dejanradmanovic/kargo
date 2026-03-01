@@ -4,7 +4,7 @@ use miette::Result;
 
 use kargo_ops::ops_tree::{self, TreeOptions};
 
-pub fn exec(
+pub async fn exec(
     depth: Option<u32>,
     duplicates: bool,
     inverted: bool,
@@ -30,10 +30,5 @@ pub fn exec(
         inverted,
     };
 
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| kargo_util::errors::KargoError::Generic {
-            message: format!("Failed to start async runtime: {e}"),
-        })?;
-
-    rt.block_on(ops_tree::tree(&project_root, &opts))
+    ops_tree::tree(&project_root, &opts).await
 }

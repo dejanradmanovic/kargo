@@ -1,6 +1,10 @@
 //! Operation: update direct dependencies to their latest compatible versions.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use kargo_core::manifest::Manifest;
 use kargo_maven::download;
@@ -26,7 +30,7 @@ struct UpdateEntry {
     artifact: String,
     old_version: String,
     new_version: String,
-    section: &'static str,
+    section: String,
 }
 
 /// Update dependencies in `Kargo.toml` to their latest versions, then re-resolve.
@@ -45,15 +49,16 @@ pub async fn update(project_root: &Path, opts: &UpdateOptions) -> miette::Result
         "org.jetbrains.kotlin".to_string(),
         "kotlin-stdlib".to_string(),
         manifest.package.kotlin.clone(),
-        "package.kotlin",
+        "package.kotlin".to_string(),
     ));
 
-    let mut updates: Vec<UpdateEntry> = Vec::new();
+    let semaphore = Arc::new(Semaphore::new(8));
+    let mut join_set = JoinSet::new();
 
-    for (toml_key, group, artifact, current_version, section) in &declared {
+    for (toml_key, group, artifact, current_version, section) in declared {
         if let Some(ref filter) = opts.dep {
-            let matches = filter == artifact
-                || filter == toml_key
+            let matches = filter == &artifact
+                || filter == &toml_key
                 || filter == "kotlin"
                 || *filter == format!("{group}:{artifact}");
             if !matches {
@@ -61,30 +66,52 @@ pub async fn update(project_root: &Path, opts: &UpdateOptions) -> miette::Result
             }
         }
 
-        for repo in &repos {
-            let url = repo.metadata_url(group, artifact);
-            let xml = download::download_text(&client, repo, &url).await?;
-            if let Some(xml) = xml {
-                if let Ok(meta) = metadata::parse_metadata(&xml) {
-                    let best = find_best_update(
-                        current_version,
-                        &meta.release.or(meta.latest),
-                        &meta.versions,
-                        opts.major,
-                    );
-                    if let Some(new_version) = best {
-                        updates.push(UpdateEntry {
-                            key: toml_key.clone(),
-                            group: group.clone(),
-                            artifact: artifact.clone(),
-                            old_version: current_version.clone(),
-                            new_version,
-                            section,
-                        });
+        let repos = repos.clone();
+        let client = client.clone();
+        let sem = semaphore.clone();
+        let allow_major = opts.major;
+
+        join_set.spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            for repo in &repos {
+                let url = repo.metadata_url(&group, &artifact);
+                match download::download_text(&client, repo, &url).await {
+                    Ok(Some(xml)) => {
+                        if let Ok(meta) = metadata::parse_metadata(&xml) {
+                            let best = find_best_update(
+                                &current_version,
+                                &meta.release.or(meta.latest),
+                                &meta.versions,
+                                allow_major,
+                            );
+                            if let Some(new_version) = best {
+                                return Ok(Some(UpdateEntry {
+                                    key: toml_key,
+                                    group,
+                                    artifact,
+                                    old_version: current_version,
+                                    new_version,
+                                    section,
+                                }));
+                            }
+                        }
+                        break;
                     }
+                    Ok(None) => continue,
+                    Err(e) => return Err(e),
                 }
-                break;
             }
+            Ok(None)
+        });
+    }
+
+    let mut updates: Vec<UpdateEntry> = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(Some(entry))) => updates.push(entry),
+            Ok(Err(e)) => return Err(e),
+            Ok(Ok(None)) => {}
+            Err(e) => return Err(miette::miette!("Background task failed: {}", e)),
         }
     }
 
@@ -130,7 +157,7 @@ pub async fn update(project_root: &Path, opts: &UpdateOptions) -> miette::Result
             })?;
 
     for u in &updates {
-        match u.section {
+        match u.section.as_str() {
             "package.kotlin" => {
                 doc["package"]["kotlin"] = Item::Value(Value::from(u.new_version.clone()));
             }
@@ -225,9 +252,7 @@ fn find_best_update(
 }
 
 /// Collect updatable direct dependencies: `(toml_key, group, artifact, version, section)`.
-fn collect_updatable_deps(
-    manifest: &Manifest,
-) -> Vec<(String, String, String, String, &'static str)> {
+fn collect_updatable_deps(manifest: &Manifest) -> Vec<(String, String, String, String, String)> {
     use kargo_core::dependency::{Dependency, MavenCoordinate};
 
     let mut deps = Vec::new();
@@ -247,20 +272,18 @@ fn collect_updatable_deps(
 
     for (key, dep) in &manifest.dependencies {
         if let Some((g, a, v)) = extract(dep) {
-            deps.push((key.clone(), g, a, v, "dependencies"));
+            deps.push((key.clone(), g, a, v, "dependencies".to_string()));
         }
     }
     for (key, dep) in &manifest.dev_dependencies {
         if let Some((g, a, v)) = extract(dep) {
-            deps.push((key.clone(), g, a, v, "dev-dependencies"));
+            deps.push((key.clone(), g, a, v, "dev-dependencies".to_string()));
         }
     }
     for (target_name, target_deps) in &manifest.target {
         for (key, dep) in &target_deps.dependencies {
             if let Some((g, a, v)) = extract(dep) {
-                let label: &'static str =
-                    Box::leak(format!("target.{target_name}").into_boxed_str());
-                deps.push((key.clone(), g, a, v, label));
+                deps.push((key.clone(), g, a, v, format!("target.{target_name}")));
             }
         }
     }

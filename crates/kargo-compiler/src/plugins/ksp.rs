@@ -46,11 +46,7 @@ pub fn auto_provisioned_ksp_jars(
     }
 
     if is_ksp2(ksp_version) {
-        coords.push((
-            KSP_GROUP.into(),
-            KSP_AA_ARTIFACT.into(),
-            ksp_version.into(),
-        ));
+        coords.push((KSP_GROUP.into(), KSP_AA_ARTIFACT.into(), ksp_version.into()));
         coords.push((
             KSP_GROUP.into(),
             KSP_API_ARTIFACT.into(),
@@ -352,11 +348,18 @@ async fn ensure_ksp2_from_github(
 
             if let Some(pom) = pom_data {
                 let pom_dir = cache.artifact_dir(KSP_GROUP, KSP_AA_ARTIFACT, ksp_version);
-                let _ = std::fs::create_dir_all(&pom_dir);
-                let _ = std::fs::write(
+                if let Err(e) = std::fs::create_dir_all(&pom_dir) {
+                    tracing::warn!(
+                        "Failed to create KSP POM directory {}: {e}",
+                        pom_dir.display()
+                    );
+                }
+                if let Err(e) = std::fs::write(
                     pom_dir.join(format!("{KSP_AA_ARTIFACT}-{ksp_version}.pom")),
                     &pom,
-                );
+                ) {
+                    tracing::warn!("Failed to write KSP POM file: {e}");
+                }
             }
 
             eprintln!("  KSP {ksp_version} installed");
@@ -380,18 +383,11 @@ async fn ensure_ksp2_from_github(
 /// written to `generated_dir/ksp/kotlin/`.
 pub fn run_ksp2_standalone(
     ksp: &KspToolchain,
-    processors: &[ProcessorInfo],
-    cache: &LocalCache,
-    source_dirs: &[PathBuf],
-    library_jars: &[PathBuf],
-    processor_scope_jars: &[PathBuf],
-    kotlin_home: &Path,
-    jdk_home: &Path,
+    ap: &super::ApContext<'_>,
     java_target: &str,
-    project_dir: &Path,
-    generated_dir: &Path,
     module_name: &str,
     ksp_options: &std::collections::BTreeMap<String, String>,
+    changed_sources: Option<&[PathBuf]>,
 ) -> miette::Result<bool> {
     let (aa_jar, api_jar, common_deps_jar, coroutines_jar) = match ksp {
         KspToolchain::Ksp2 {
@@ -403,7 +399,8 @@ pub fn run_ksp2_standalone(
         _ => return Ok(false),
     };
 
-    let ksp_procs: Vec<&ProcessorInfo> = processors
+    let ksp_procs: Vec<&ProcessorInfo> = ap
+        .processors
         .iter()
         .filter(|p| p.kind == ProcessorKind::Ksp)
         .collect();
@@ -413,13 +410,13 @@ pub fn run_ksp2_standalone(
 
     let proc_jars: Vec<PathBuf> = ksp_procs
         .iter()
-        .filter_map(|p| cache.get_jar(&p.group, &p.artifact, &p.version, None))
+        .filter_map(|p| ap.cache.get_jar(&p.group, &p.artifact, &p.version, None))
         .collect();
     if proc_jars.is_empty() {
         return Ok(false);
     }
 
-    let ksp_dir = generated_dir.join("ksp");
+    let ksp_dir = ap.generated_dir.join("ksp");
     let kotlin_out = ksp_dir.join("kotlin");
     let java_out = ksp_dir.join("java");
     let class_out = ksp_dir.join("classes");
@@ -435,7 +432,7 @@ pub fn run_ksp2_standalone(
         std::fs::create_dir_all(dir).map_err(KargoError::Io)?;
     }
 
-    let stdlib_jar = kotlin_home.join("lib").join("kotlin-stdlib.jar");
+    let stdlib_jar = ap.kotlin_home.join("lib").join("kotlin-stdlib.jar");
     let tool_cp = to_classpath_string(&[
         aa_jar.clone(),
         api_jar.clone(),
@@ -444,7 +441,8 @@ pub fn run_ksp2_standalone(
         coroutines_jar.clone(),
     ]);
 
-    let source_roots: Vec<String> = source_dirs
+    let source_roots: Vec<String> = ap
+        .sources
         .iter()
         .filter(|d| d.is_dir())
         .map(|d| d.to_string_lossy().to_string())
@@ -454,22 +452,22 @@ pub fn run_ksp2_standalone(
     }
     let source_roots_str = source_roots.join(if cfg!(windows) { ";" } else { ":" });
 
-    let libs_str = to_classpath_string(library_jars);
+    let libs_str = to_classpath_string(ap.library_jars);
 
     let mut full_proc_cp = proc_jars.clone();
-    for jar in processor_scope_jars {
+    for jar in ap.processor_scope_jars {
         if !full_proc_cp.contains(jar) {
             full_proc_cp.push(jar.clone());
         }
     }
-    for lib_jar in library_jars {
+    for lib_jar in ap.library_jars {
         if !full_proc_cp.contains(lib_jar) {
             full_proc_cp.push(lib_jar.clone());
         }
     }
     let proc_cp = to_classpath_string(&full_proc_cp);
 
-    let java_bin = jdk_home.join("bin").join("java");
+    let java_bin = ap.jdk_home.join("bin").join("java");
 
     let mut cmd = kargo_util::process::CommandBuilder::new(java_bin.to_string_lossy().to_string())
         .arg("-cp")
@@ -480,7 +478,7 @@ pub fn run_ksp2_standalone(
         .arg(format!("-source-roots={source_roots_str}"))
         .arg(format!(
             "-project-base-dir={}",
-            project_dir.to_string_lossy()
+            ap.project_dir.to_string_lossy()
         ))
         .arg(format!("-output-base-dir={}", ksp_dir.to_string_lossy()))
         .arg(format!("-caches-dir={}", caches_dir.to_string_lossy()))
@@ -496,7 +494,39 @@ pub fn run_ksp2_standalone(
         ))
         .arg("-language-version=2.0")
         .arg("-api-version=2.0")
-        .arg("-incremental=false");
+        .arg("-incremental=true");
+
+    // Clean KSP output directories before each run so stale files from
+    // aggregating processors (e.g., Koin's KoinMeta) don't cause conflicts.
+    // KSP2 will regenerate all needed outputs. The caches directory is
+    // preserved so KSP2 can track input→output mappings for incrementality.
+    for dir in [&kotlin_out, &java_out, &class_out, &resource_out] {
+        if dir.is_dir() {
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::create_dir_all(dir);
+        }
+    }
+
+    if let Some(changed) = changed_sources {
+        if !changed.is_empty() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let mut modified = Vec::new();
+            let mut removed = Vec::new();
+            for path in changed {
+                if path.exists() {
+                    modified.push(path.to_string_lossy().to_string());
+                } else {
+                    removed.push(path.to_string_lossy().to_string());
+                }
+            }
+            if !modified.is_empty() {
+                cmd = cmd.arg(format!("-modified-sources={}", modified.join(sep)));
+            }
+            if !removed.is_empty() {
+                cmd = cmd.arg(format!("-removed-sources={}", removed.join(sep)));
+            }
+        }
+    }
 
     if !ksp_options.is_empty() {
         let opts: Vec<String> = ksp_options
@@ -512,7 +542,7 @@ pub fn run_ksp2_standalone(
 
     cmd = cmd.arg(&proc_cp);
 
-    cmd = cmd.env("JAVA_HOME", jdk_home.to_string_lossy().to_string());
+    cmd = cmd.env("JAVA_HOME", ap.jdk_home.to_string_lossy().to_string());
 
     let output = cmd.exec().map_err(|e| KargoError::Generic {
         message: format!("Failed to run KSP2: {e}"),
@@ -614,7 +644,12 @@ pub fn build_ksp1_args(
         &resource_out,
         &caches_dir,
     ] {
-        let _ = std::fs::create_dir_all(dir);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(
+                "Failed to create KSP output directory {}: {e}",
+                dir.display()
+            );
+        }
     }
 
     let mut args = Vec::new();

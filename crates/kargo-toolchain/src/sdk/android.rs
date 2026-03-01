@@ -209,7 +209,12 @@ pub fn install_android_sdk(compile_sdk: u32) -> miette::Result<AndroidSdkInfo> {
                 fs::rename(entry.path(), target).map_err(KargoError::Io)?;
             }
         }
-        let _ = fs::remove_dir_all(&inner);
+        if let Err(e) = fs::remove_dir_all(&inner) {
+            tracing::warn!(
+                "Failed to remove Android SDK cmdline-tools inner directory {}: {e}",
+                inner.display()
+            );
+        }
     }
 
     let sdkmanager = sdkmanager_path(&sdk_home);

@@ -5,7 +5,7 @@ use kargo_core::template::{TemplateContext, TemplateRegistry};
 use kargo_core::DEFAULT_KOTLIN_VERSION;
 use kargo_util::errors::KargoError;
 
-pub fn exec(name: &str, template: &str) -> Result<()> {
+pub async fn exec(name: &str, template: &str) -> Result<()> {
     let project_dir = Path::new(name);
     if project_dir.exists() {
         return Err(KargoError::Generic {
@@ -33,7 +33,7 @@ pub fn exec(name: &str, template: &str) -> Result<()> {
         name, template
     );
 
-    kargo_ops::ops_setup::post_scaffold(project_dir);
+    kargo_ops::ops_setup::post_scaffold(project_dir).await;
 
     Ok(())
 }

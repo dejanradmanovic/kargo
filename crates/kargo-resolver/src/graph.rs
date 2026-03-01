@@ -138,7 +138,8 @@ impl DependencyGraph {
             }
         }
 
-        let has_non_compile = !test_deps.is_empty() || !ksp_deps.is_empty() || !kapt_deps.is_empty();
+        let has_non_compile =
+            !test_deps.is_empty() || !ksp_deps.is_empty() || !kapt_deps.is_empty();
         let section_count = [&compile_deps, &test_deps, &ksp_deps, &kapt_deps]
             .iter()
             .filter(|s| !s.is_empty())

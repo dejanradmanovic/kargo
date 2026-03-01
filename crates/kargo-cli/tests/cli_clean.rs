@@ -65,7 +65,7 @@ fn test_clean_specific_variant() {
         .success();
 
     let project_dir = tmp.path().join("variant-clean-test");
-    let variant_dir = project_dir.join("build/variants/freeStagingDev");
+    let variant_dir = project_dir.join("build/freeStagingDev");
     fs::create_dir_all(&variant_dir).unwrap();
     fs::write(variant_dir.join("app.jar"), "fake").unwrap();
 
@@ -77,7 +77,7 @@ fn test_clean_specific_variant() {
         .stdout(predicate::str::contains("Cleaned variant"));
 
     assert!(!variant_dir.exists());
-    assert!(project_dir.join("build/variants").exists());
+    assert!(project_dir.join("build").exists());
 }
 
 #[test]

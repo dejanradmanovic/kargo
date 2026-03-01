@@ -6,12 +6,12 @@ use std::path::Path;
 /// `.kargo.env` holds build secrets and credentials (private registry auth,
 /// signing passwords, CI tokens). Values are available via `${env:VAR}`
 /// interpolation in `Kargo.toml` and as env vars during builds.
-pub fn load_env_file(path: &Path) -> std::io::Result<BTreeMap<String, String>> {
+pub fn load_env_file(path: &Path) -> miette::Result<BTreeMap<String, String>> {
     let mut map = BTreeMap::new();
     if !path.is_file() {
         return Ok(map);
     }
-    let content = std::fs::read_to_string(path)?;
+    let content = std::fs::read_to_string(path).map_err(kargo_util::errors::KargoError::Io)?;
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {

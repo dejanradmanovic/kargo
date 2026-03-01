@@ -20,3 +20,22 @@ pub fn ensure_dir(path: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// Recursively compute total size of a directory in bytes.
+pub fn dir_size(path: &Path) -> u64 {
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        dir_size(&path)
+                    } else {
+                        entry.metadata().map(|m| m.len()).unwrap_or(0)
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}

@@ -9,7 +9,8 @@ mod commands;
 
 use miette::Result;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -18,5 +19,5 @@ fn main() -> Result<()> {
         .init();
 
     let args = cli::parse();
-    commands::dispatch(args)
+    commands::dispatch(args).await
 }
