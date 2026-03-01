@@ -1,5 +1,9 @@
 pub mod build_cache;
+pub mod buildconfig;
+pub mod classpath;
 pub mod compose;
+pub mod dispatch;
+pub mod env;
 pub mod fingerprint;
 pub mod incremental;
 pub mod job_queue;
@@ -7,6 +11,7 @@ pub mod kotlinc;
 pub mod kotlinc_js;
 pub mod kotlinc_native;
 pub mod plugins;
+pub mod source_set_discovery;
 pub mod source_set_hierarchy;
 pub mod unit;
 pub mod unit_graph;

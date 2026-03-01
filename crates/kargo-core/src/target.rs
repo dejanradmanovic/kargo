@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Per-target configuration from `[targets.<name>]`.
@@ -128,5 +130,61 @@ impl KotlinTarget {
             Self::WasmJs | Self::WasmWasi => "kotlinc",
             _ => "kotlinc-native",
         }
+    }
+
+    /// Returns the canonical kebab-case name used in project layout and output dirs.
+    pub fn kebab_name(&self) -> &'static str {
+        match self {
+            Self::Jvm => "jvm",
+            Self::Android => "android",
+            Self::Js => "js",
+            Self::WasmJs => "wasm-js",
+            Self::WasmWasi => "wasm-wasi",
+            Self::IosArm64 => "ios-arm64",
+            Self::IosSimulatorArm64 => "ios-simulator-arm64",
+            Self::IosX64 => "ios-x64",
+            Self::MacosArm64 => "macos-arm64",
+            Self::MacosX64 => "macos-x64",
+            Self::LinuxX64 => "linux-x64",
+            Self::LinuxArm64 => "linux-arm64",
+            Self::MingwX64 => "mingw-x64",
+            Self::TvosArm64 => "tvos-arm64",
+            Self::TvosSimulatorArm64 => "tvos-simulator-arm64",
+            Self::WatchosArm64 => "watchos-arm64",
+            Self::WatchosSimulatorArm64 => "watchos-simulator-arm64",
+            Self::AndroidNativeArm64 => "android-native-arm64",
+            Self::AndroidNativeX64 => "android-native-x64",
+        }
+    }
+
+    /// Returns the source set name suffix used in project layout (e.g. "jvm" for `jvmMain/`).
+    pub fn source_set_name(&self) -> &'static str {
+        match self {
+            Self::Jvm => "jvm",
+            Self::Android => "android",
+            Self::Js => "js",
+            Self::WasmJs => "wasmJs",
+            Self::WasmWasi => "wasmWasi",
+            Self::IosArm64 => "iosArm64",
+            Self::IosSimulatorArm64 => "iosSimulatorArm64",
+            Self::IosX64 => "iosX64",
+            Self::MacosArm64 => "macosArm64",
+            Self::MacosX64 => "macosX64",
+            Self::LinuxX64 => "linuxX64",
+            Self::LinuxArm64 => "linuxArm64",
+            Self::MingwX64 => "mingwX64",
+            Self::TvosArm64 => "tvosArm64",
+            Self::TvosSimulatorArm64 => "tvosSimulatorArm64",
+            Self::WatchosArm64 => "watchosArm64",
+            Self::WatchosSimulatorArm64 => "watchosSimulatorArm64",
+            Self::AndroidNativeArm64 => "androidNativeArm64",
+            Self::AndroidNativeX64 => "androidNativeX64",
+        }
+    }
+}
+
+impl fmt::Display for KotlinTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.kebab_name())
     }
 }

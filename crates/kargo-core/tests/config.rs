@@ -15,7 +15,7 @@ fn test_global_config_default_no_target() {
 #[test]
 fn test_global_config_default_cache_dir() {
     let config = GlobalConfig::default();
-    assert_eq!(config.cache.dir, "~/.kargo/cache");
+    assert_eq!(config.cache.dir, "~/.kargo/dependencies");
 }
 
 #[test]

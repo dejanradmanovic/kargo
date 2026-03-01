@@ -28,14 +28,16 @@ fn test_new_jvm_project() {
     assert!(!project_dir.join("local.properties").exists());
     assert!(project_dir.join("src/main/kotlin").is_dir());
     assert!(project_dir.join("src/test/kotlin").is_dir());
-    assert!(project_dir.join("src/main/kotlin/Main.kt").is_file());
+    assert!(project_dir.join("src/main/kotlin/com/example/Main.kt").is_file());
+    assert!(project_dir.join("src/test/kotlin/com/example/MainTest.kt").is_file());
 
     let manifest = fs::read_to_string(project_dir.join("Kargo.toml")).unwrap();
     assert!(manifest.contains(&format!("name = \"{project_name}\"")));
+    assert!(manifest.contains("group = \"com.example\""));
     assert!(manifest.contains("kotlin = \"2.3.0\""));
     assert!(manifest.contains("[targets.jvm]"));
 
-    let main_kt = fs::read_to_string(project_dir.join("src/main/kotlin/Main.kt")).unwrap();
+    let main_kt = fs::read_to_string(project_dir.join("src/main/kotlin/com/example/Main.kt")).unwrap();
     assert!(main_kt.contains("fun main()"));
     assert!(main_kt.contains(project_name));
 }

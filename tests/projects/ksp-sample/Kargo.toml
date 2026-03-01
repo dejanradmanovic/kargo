@@ -1,0 +1,47 @@
+[package]
+name = "jvm-sample"
+group = "com.example"
+version = "0.1.0"
+kotlin = "2.3.0"
+ksp-version = "2.3.6"
+description = "A JVM sample showcasing Koin DI with KSP, Ktor HTTP client, and kotlinx-serialization"
+main-class = "com.example.MainKt"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+# Dependency Injection
+koin-core = "io.insert-koin:koin-core-jvm:4.0.2"
+koin-annotations = "io.insert-koin:koin-annotations-jvm:2.0.0"
+
+# HTTP Client (Ktor 3.x)
+ktor-client-core = "io.ktor:ktor-client-core-jvm:3.1.1"
+ktor-client-cio = "io.ktor:ktor-client-cio-jvm:3.1.1"
+ktor-client-content-negotiation = "io.ktor:ktor-client-content-negotiation-jvm:3.1.1"
+ktor-serialization-kotlinx-json = "io.ktor:ktor-serialization-kotlinx-json-jvm:3.1.1"
+
+# Serialization
+kotlinx-serialization-json = "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.8.0"
+
+# Coroutines
+kotlinx-coroutines-core = "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.1"
+
+# Runtime transitive deps (KMP libraries resolved to JVM platform)
+# TODO: auto-resolve these when KMP platform targeting lands (Phase 5)
+kotlinx-io-core = "org.jetbrains.kotlinx:kotlinx-io-core-jvm:0.6.0"
+kotlinx-io-bytestring = "org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:0.6.0"
+slf4j-simple = "org.slf4j:slf4j-simple:2.0.16"
+
+[ksp]
+koin-ksp-compiler = "io.insert-koin:koin-ksp-compiler-jvm:2.0.0"
+
+[ksp-options]
+KOIN_DEFAULT_MODULE = "false"
+
+[build-config]
+API_BASE_URL = "https://api.github.com"
+
+[dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"
+kotlinx-coroutines-test = "org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.10.1"

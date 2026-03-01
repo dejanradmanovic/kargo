@@ -39,9 +39,11 @@ pub async fn tree(project_root: &Path, opts: &TreeOptions) -> miette::Result<()>
         None
     };
 
+    let sp = kargo_util::progress::spinner("Resolving dependencies...");
     let client = download::build_client()?;
     let result =
         resolver::resolve(&manifest, &repos, &cache, existing_lock.as_ref(), &client).await?;
+    sp.finish_and_clear();
 
     // Handle --why
     if let Some(ref target) = opts.why {

@@ -70,7 +70,7 @@ pub async fn resolve(
     let mut conflicts = ConflictReport::new();
 
     let root = graph.add_node(ResolvedNode {
-        group: String::new(),
+        group: manifest.package.group.clone().unwrap_or_default(),
         artifact: manifest.package.name.clone(),
         version: manifest.package.version.clone(),
         scope: "compile".to_string(),
@@ -95,6 +95,18 @@ pub async fn resolve(
             if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
                 direct_deps.push((coord, "compile".to_string()));
             }
+        }
+    }
+    // KSP processor deps — build-time only, excluded from runtime classpath
+    for (name, dep) in &manifest.ksp {
+        if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
+            direct_deps.push((coord, "ksp".to_string()));
+        }
+    }
+    // KAPT processor deps — build-time only, excluded from runtime classpath
+    for (name, dep) in &manifest.kapt {
+        if let Some(coord) = resolve_dep_coordinate(dep, name, manifest) {
+            direct_deps.push((coord, "kapt".to_string()));
         }
     }
 
@@ -411,6 +423,8 @@ async fn fetch_pom_from_repos(
 }
 
 /// Maven scope propagation rules.
+/// Processor scopes (`ksp`, `kapt`) propagate like `test`: all transitive
+/// deps inherit the processor scope so they stay out of the runtime classpath.
 fn propagate_scope(parent_scope: &str, dep_scope: &str) -> String {
     match (parent_scope, dep_scope) {
         ("compile", "compile") => "compile",
@@ -419,6 +433,8 @@ fn propagate_scope(parent_scope: &str, dep_scope: &str) -> String {
         ("runtime", "runtime") => "runtime",
         ("test", _) => "test",
         (_, "test") => "test",
+        ("ksp", _) => "ksp",
+        ("kapt", _) => "kapt",
         (_, "provided") => "provided",
         _ => "compile",
     }

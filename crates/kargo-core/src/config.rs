@@ -90,7 +90,7 @@ impl Default for CacheConfig {
 }
 
 fn default_cache_dir() -> String {
-    "~/.kargo/cache".to_string()
+    "~/.kargo/dependencies".to_string()
 }
 
 /// Global toolchain settings from `[toolchain]`.

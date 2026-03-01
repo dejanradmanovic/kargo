@@ -13,6 +13,8 @@ use kargo_util::hash::sha256_bytes;
 /// Fetch all dependencies: resolve, download artifacts to the project cache,
 /// and update the lockfile.
 pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
+    use kargo_util::progress::{spinner, status};
+
     let manifest_path = project_root.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
     let repos = resolver::build_repos(&manifest);
@@ -25,9 +27,11 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
         None
     };
 
+    let sp = spinner("Resolving dependencies...");
     let client = download::build_client()?;
     let result =
         resolver::resolve(&manifest, &repos, &cache, existing_lock.as_ref(), &client).await?;
+    sp.finish_and_clear();
 
     if !result.conflicts.is_empty() && verbose {
         eprintln!("{}", result.conflicts);
@@ -38,6 +42,7 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let mut up_to_date = 0u32;
     let mut checksums: HashMap<String, String> = HashMap::new();
 
+    let dl_sp = spinner(&format!("Downloading {artifact_count} dependencies..."));
     for artifact in &result.artifacts {
         let coord_key = format!(
             "{}:{}:{}",
@@ -53,6 +58,11 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
             }
             continue;
         }
+
+        dl_sp.set_message(format!(
+            "Downloading {}:{}...",
+            artifact.artifact, artifact.version
+        ));
 
         let mut found = false;
         for repo in &repos {
@@ -78,19 +88,50 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
         }
 
         if !found && verbose {
-            eprintln!(
-                "  Warning: JAR not found for {}:{}:{}",
-                artifact.group, artifact.artifact, artifact.version
+            kargo_util::progress::status_warn(
+                "Warning",
+                &format!(
+                    "JAR not found for {}:{}:{}",
+                    artifact.group, artifact.artifact, artifact.version
+                ),
             );
         }
     }
+    dl_sp.finish_and_clear();
 
-    // Prune stale artifacts no longer in the resolved set
-    let keep: std::collections::HashSet<(String, String, String)> = result
+    // Prune stale artifacts no longer in the resolved set.
+    // Also protect auto-provisioned JARs (KSP toolchain, JUnit runner) that
+    // are downloaded outside the normal resolve→fetch cycle.
+    let mut keep: std::collections::HashSet<(String, String, String)> = result
         .artifacts
         .iter()
         .map(|a| (a.group.clone(), a.artifact.clone(), a.version.clone()))
         .collect();
+
+    // JUnit platform (auto-provisioned by `kargo test`)
+    let has_kotlin_test = manifest.dev_dependencies.values().any(|dep| {
+        let coord = match dep {
+            kargo_core::dependency::Dependency::Short(s) => s.as_str(),
+            kargo_core::dependency::Dependency::Detailed(d) => d.artifact.as_str(),
+            kargo_core::dependency::Dependency::Catalog(c) => c.catalog.as_str(),
+        };
+        coord.contains("kotlin-test") || coord.contains("junit")
+    });
+    if has_kotlin_test {
+        keep.insert((
+            crate::ops_test::JUNIT_PLATFORM_GROUP.into(),
+            crate::ops_test::JUNIT_PLATFORM_STANDALONE.into(),
+            crate::ops_test::JUNIT_PLATFORM_VERSION.into(),
+        ));
+    }
+
+    // KSP toolchain JARs (auto-provisioned by annotation processing)
+    if let Some(ref ksp_ver) = manifest.package.ksp_version {
+        for coord in kargo_compiler::plugins::auto_provisioned_ksp_jars(ksp_ver, &cache) {
+            keep.insert(coord);
+        }
+    }
+
     let pruned = cache.prune(&keep);
 
     let lock_packages = resolution_to_lockfile_packages(&result, &checksums);
@@ -98,12 +139,15 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     lockfile.write_to(&lockfile_path)?;
 
     if downloaded > 0 || pruned > 0 || verbose {
-        eprintln!(
-            "Resolved {artifact_count} dependencies, downloaded {downloaded}, \
-             {up_to_date} up-to-date, {pruned} pruned"
+        status(
+            "Fetched",
+            &format!(
+                "{artifact_count} dependencies, {downloaded} downloaded, \
+                 {up_to_date} up-to-date, {pruned} pruned"
+            ),
         );
     } else if artifact_count > 0 {
-        eprintln!("All {artifact_count} dependencies up-to-date");
+        status("Fetched", &format!("all {artifact_count} dependencies up-to-date"));
     }
 
     Ok(())
@@ -157,8 +201,9 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
     }
 
     if mismatches.is_empty() {
-        eprintln!(
-            "Verified {verified} checksums ({skipped} skipped, no cached JAR or no checksum)"
+        kargo_util::progress::status(
+            "Verified",
+            &format!("{verified} checksums ({skipped} skipped, no cached JAR or no checksum)"),
         );
         Ok(())
     } else {
@@ -167,7 +212,7 @@ pub fn verify_checksums(project_root: &Path) -> miette::Result<()> {
         Err(kargo_util::errors::KargoError::Generic {
             message: format!(
                 "{count} checksum mismatch(es) detected:\n{details}\n\n\
-                 Cached JARs may be corrupted. Delete .kargo/cache and run `kargo fetch`."
+                 Cached JARs may be corrupted. Delete .kargo/dependencies and run `kargo fetch`."
             ),
         }
         .into())
@@ -208,6 +253,18 @@ pub fn collect_declared_deps(manifest: &Manifest) -> Vec<(String, String, String
             if let Some(t) = extract(dep) {
                 declared.push(t);
             }
+        }
+    }
+
+    // Include KSP and KAPT processor dependencies
+    for dep in manifest.ksp.values() {
+        if let Some(t) = extract(dep) {
+            declared.push(t);
+        }
+    }
+    for dep in manifest.kapt.values() {
+        if let Some(t) = extract(dep) {
+            declared.push(t);
         }
     }
 

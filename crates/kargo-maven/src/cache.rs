@@ -6,17 +6,17 @@ use std::path::{Path, PathBuf};
 use crate::pom::{self, Pom};
 use crate::repository::MavenRepository;
 
-/// Project-local Maven artifact cache at `<project>/.kargo/cache/`.
+/// Project-local Maven artifact cache at `<project>/.kargo/dependencies/`.
 #[derive(Debug, Clone)]
 pub struct LocalCache {
     root: PathBuf,
 }
 
 impl LocalCache {
-    /// Create a cache rooted at `project_root/.kargo/cache/`.
+    /// Create a cache rooted at `project_root/.kargo/dependencies/`.
     pub fn new(project_root: &Path) -> Self {
         Self {
-            root: project_root.join(".kargo").join("cache"),
+            root: project_root.join(".kargo").join("dependencies"),
         }
     }
 
@@ -26,7 +26,7 @@ impl LocalCache {
     }
 
     /// Path within the cache for a given Maven coordinate.
-    fn artifact_dir(&self, group: &str, artifact: &str, version: &str) -> PathBuf {
+    pub fn artifact_dir(&self, group: &str, artifact: &str, version: &str) -> PathBuf {
         self.root
             .join(group.replace('.', "/"))
             .join(artifact)
@@ -300,9 +300,9 @@ mod tests {
             )
             .unwrap();
 
-        let expected = tmp
-            .path()
-            .join(".kargo/cache/org/jetbrains/kotlin/kotlin-stdlib/2.3.0/kotlin-stdlib-2.3.0.jar");
+        let expected = tmp.path().join(
+            ".kargo/dependencies/org/jetbrains/kotlin/kotlin-stdlib/2.3.0/kotlin-stdlib-2.3.0.jar",
+        );
         assert!(expected.is_file());
     }
 

@@ -383,7 +383,11 @@ pub fn ensure_lockfile(project_dir: &Path) -> miette::Result<()> {
     let manifest_path = project_dir.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
 
-    if manifest.dependencies.is_empty() && manifest.dev_dependencies.is_empty() {
+    if manifest.dependencies.is_empty()
+        && manifest.dev_dependencies.is_empty()
+        && manifest.ksp.is_empty()
+        && manifest.kapt.is_empty()
+    {
         return Ok(());
     }
 

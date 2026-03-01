@@ -123,12 +123,16 @@ pub async fn audit(project_root: &Path, opts: &AuditOptions) -> miette::Result<(
         None
     };
 
+    let sp = kargo_util::progress::spinner("Resolving dependencies...");
     let client = download::build_client()?;
     let result =
         resolver::resolve(&manifest, &repos, &cache, existing_lock.as_ref(), &client).await?;
+    sp.finish_and_clear();
 
     let dep_count = result.artifacts.len();
-    eprintln!("Scanning {dep_count} dependencies for vulnerabilities...");
+    let sp = kargo_util::progress::spinner(&format!(
+        "Scanning {dep_count} dependencies for vulnerabilities..."
+    ));
 
     let mut all_findings: Vec<Finding> = Vec::new();
 
@@ -153,8 +157,10 @@ pub async fn audit(project_root: &Path, opts: &AuditOptions) -> miette::Result<(
     // Apply ignores
     all_findings.retain(|f| !opts.ignore.contains(&f.id));
 
+    sp.finish_and_clear();
+
     if all_findings.is_empty() {
-        eprintln!("No vulnerabilities found.");
+        kargo_util::progress::status("Audit", &format!("{dep_count} dependencies — no vulnerabilities found"));
         return Ok(());
     }
 

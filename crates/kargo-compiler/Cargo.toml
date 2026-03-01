@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 kargo-core.workspace = true
 kargo-toolchain.workspace = true
+kargo-maven.workspace = true
 kargo-util.workspace = true
 petgraph.workspace = true
 sha2.workspace = true
@@ -19,3 +20,6 @@ thiserror.workspace = true
 miette.workspace = true
 tracing.workspace = true
 tempfile.workspace = true
+globset.workspace = true
+zip.workspace = true
+reqwest.workspace = true

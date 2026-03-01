@@ -1,0 +1,14 @@
+[package]
+name = "jvm-sample"
+group = "com.example"
+version = "0.1.0"
+kotlin = "2.3.0"
+main-class = "com.example.MainKt"
+
+[targets.jvm]
+java-target = "21"
+
+[dependencies]
+
+[dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"

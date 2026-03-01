@@ -433,6 +433,8 @@ pub enum CacheAction {
     Clean,
     /// Push build outputs to remote cache
     Push,
+    /// Stop the Kotlin compiler daemon
+    StopDaemon,
 }
 
 pub fn parse() -> Cli {

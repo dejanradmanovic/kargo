@@ -6,8 +6,10 @@ description = "JVM-only Kotlin application"
 content = """
 [package]
 name = "{{project_name}}"
+group = "com.example"
 version = "0.1.0"
 kotlin = "{{kotlin_version}}"
+main-class = "com.example.MainKt"
 
 [targets.jvm]
 java-target = "21"
@@ -15,6 +17,7 @@ java-target = "21"
 [dependencies]
 
 [dev-dependencies]
+kotlin-test = "org.jetbrains.kotlin:kotlin-test:2.3.0"
 """
 
 [[directories]]
@@ -24,11 +27,51 @@ path = "src/main/kotlin"
 path = "src/test/kotlin"
 
 [[files]]
-path = "src/main/kotlin/Main.kt"
+path = "src/main/kotlin/com/example/Main.kt"
 content = """
 package com.example
 
+fun greet(name: String = "World"): String = "Hello, $name!"
+
 fun main() {
-    println("Hello from {{project_name}}!")
+    println(greet("{{project_name}}"))
 }
+
+"""
+
+[[files]]
+path = "src/test/kotlin/com/example/MainTest.kt"
+content = """
+package com.example
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class GreetTest {
+
+    @Test
+    fun `greet with default name`() {
+        assertEquals("Hello, World!", greet())
+    }
+
+    @Test
+    fun `greet with custom name`() {
+        assertEquals("Hello, Kargo!", greet("Kargo"))
+    }
+
+    @Test
+    fun `greet with empty name`() {
+        assertEquals("Hello, !", greet(""))
+    }
+}
+
+"""
+
+[[files]]
+path = "src/main/resources/application.properties"
+content = """
+app.name={{project_name}}
+app.version=0.1.0
 """

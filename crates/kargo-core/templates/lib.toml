@@ -6,6 +6,7 @@ description = "JVM Kotlin library"
 content = """
 [package]
 name = "{{project_name}}"
+group = "com.example"
 version = "0.1.0"
 kotlin = "{{kotlin_version}}"
 

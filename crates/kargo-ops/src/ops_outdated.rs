@@ -30,6 +30,7 @@ pub async fn outdated(project_root: &Path, opts: &OutdatedOptions) -> miette::Re
     let manifest_path = project_root.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
     let repos = resolver::build_repos(&manifest);
+    let sp = kargo_util::progress::spinner("Checking for outdated dependencies...");
     let client = download::build_client()?;
 
     let mut declared = collect_declared_deps_with_section(&manifest);
@@ -71,8 +72,10 @@ pub async fn outdated(project_root: &Path, opts: &OutdatedOptions) -> miette::Re
         }
     }
 
+    sp.finish_and_clear();
+
     if entries.is_empty() {
-        println!("All dependencies are up to date.");
+        kargo_util::progress::status("Outdated", "all dependencies are up to date");
         return Ok(());
     }
 
@@ -140,6 +143,16 @@ fn collect_declared_deps_with_section(
                     Box::leak(format!("target.{target_name}").into_boxed_str());
                 declared.push((g, a, v, label));
             }
+        }
+    }
+    for dep in manifest.ksp.values() {
+        if let Some((g, a, v)) = extract(dep) {
+            declared.push((g, a, v, "ksp"));
+        }
+    }
+    for dep in manifest.kapt.values() {
+        if let Some((g, a, v)) = extract(dep) {
+            declared.push((g, a, v, "kapt"));
         }
     }
 

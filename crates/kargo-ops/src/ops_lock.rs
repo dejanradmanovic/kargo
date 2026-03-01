@@ -14,15 +14,19 @@ use crate::ops_fetch::resolution_to_lockfile_packages;
 
 /// Force re-resolve all dependencies and regenerate `Kargo.lock`.
 pub async fn lock(project_root: &Path, verbose: bool) -> miette::Result<()> {
+    use kargo_util::progress::{spinner, status};
+
     let manifest_path = project_root.join("Kargo.toml");
     let manifest = Manifest::from_path(&manifest_path)?;
     let repos = resolver::build_repos(&manifest);
     let cache = LocalCache::new(project_root);
 
+    let sp = spinner("Resolving dependencies...");
     let client = download::build_client()?;
 
     // Force fresh resolution (no lockfile fast-path)
     let result = resolver::resolve(&manifest, &repos, &cache, None, &client).await?;
+    sp.finish_and_clear();
 
     if !result.conflicts.is_empty() && verbose {
         eprintln!("{}", result.conflicts);
@@ -49,7 +53,7 @@ pub async fn lock(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let lockfile_path = project_root.join("Kargo.lock");
     lockfile.write_to(&lockfile_path)?;
 
-    eprintln!("Resolved {} dependencies", result.artifacts.len());
+    status("Resolved", &format!("{} dependencies", result.artifacts.len()));
 
     Ok(())
 }

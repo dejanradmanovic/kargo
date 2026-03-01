@@ -3,6 +3,8 @@
 mod add;
 mod audit;
 mod build;
+mod cache;
+mod check;
 mod clean;
 mod env;
 mod fetch;
@@ -11,7 +13,9 @@ mod lock;
 mod new;
 mod outdated;
 mod remove;
+mod run;
 mod self_;
+mod test_;
 mod toolchain;
 mod tree;
 mod update;
@@ -30,8 +34,26 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Command::Toolchain { action } => toolchain::exec(action),
         Command::SelfCmd { action } => self_::exec(action),
         Command::Build {
-            target, profile, ..
-        } => build::exec(target.as_deref(), profile.as_deref(), cli.verbose),
+            target,
+            profile,
+            release,
+            timings,
+            offline,
+            ..
+        } => build::exec(
+            target.as_deref(),
+            profile.as_deref(),
+            release,
+            timings,
+            offline,
+            cli.verbose,
+        ),
+        Command::Run { target, args, .. } => run::exec(target.as_deref(), &args, cli.verbose),
+        Command::Test { target, filter, .. } => {
+            test_::exec(target.as_deref(), filter.as_deref(), cli.verbose)
+        }
+        Command::Check { .. } => check::exec(cli.verbose),
+        Command::Cache { action } => cache::exec(action),
         Command::Add {
             dep,
             dev,

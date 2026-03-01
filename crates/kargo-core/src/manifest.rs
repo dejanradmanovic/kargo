@@ -68,12 +68,34 @@ pub struct Manifest {
 
     #[serde(default, rename = "package.docker")]
     pub docker: Option<DockerConfig>,
+
+    #[serde(default)]
+    pub ksp: BTreeMap<String, Dependency>,
+
+    #[serde(default, rename = "ksp-options")]
+    pub ksp_options: BTreeMap<String, String>,
+
+    #[serde(default)]
+    pub kapt: BTreeMap<String, Dependency>,
+
+    #[serde(default, rename = "kapt-options")]
+    pub kapt_options: BTreeMap<String, String>,
+
+    /// Custom compile-time constants from `[build-config]`.
+    ///
+    /// These are merged with flavor build-config and emitted as
+    /// `const val` fields in the generated `BuildConfig` object.
+    /// Values support `${env:VAR}` interpolation (resolved at load time).
+    #[serde(default, rename = "build-config")]
+    pub build_config: BTreeMap<String, String>,
 }
 
 /// Package identity and metadata from the `[package]` section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageMetadata {
     pub name: String,
+    #[serde(default)]
+    pub group: Option<String>,
     pub version: String,
     pub kotlin: String,
     #[serde(default)]
@@ -84,6 +106,10 @@ pub struct PackageMetadata {
     pub license: Option<String>,
     #[serde(default)]
     pub repository: Option<String>,
+    #[serde(default, rename = "main-class")]
+    pub main_class: Option<String>,
+    #[serde(default, rename = "ksp-version")]
+    pub ksp_version: Option<String>,
 }
 
 /// Compose Multiplatform configuration from `[compose]`.

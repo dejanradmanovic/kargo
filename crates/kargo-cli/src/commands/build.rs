@@ -2,28 +2,32 @@
 
 use miette::Result;
 
-pub fn exec(target: Option<&str>, profile: Option<&str>, verbose: bool) -> Result<()> {
+use kargo_ops::ops_build::{self, BuildOptions};
+
+pub fn exec(
+    target: Option<&str>,
+    profile: Option<&str>,
+    release: bool,
+    timings: bool,
+    offline: bool,
+    verbose: bool,
+) -> Result<()> {
     let cwd = std::env::current_dir().map_err(kargo_util::errors::KargoError::Io)?;
 
-    let result = kargo_ops::ops_setup::preflight(&cwd)?;
+    let opts = BuildOptions {
+        target: target.map(String::from),
+        profile: profile.map(String::from),
+        release,
+        verbose,
+        timings,
+        offline,
+        ..Default::default()
+    };
 
-    if verbose {
-        kargo_ops::ops_setup::print_preflight_summary(&result);
-        println!();
-    }
+    let result = ops_build::build(&cwd, &opts)?;
 
-    kargo_ops::ops_setup::ensure_lockfile(&cwd)?;
-
-    eprintln!(
-        "kargo build is not yet implemented (Kotlin {} ready, JDK {} available)",
-        result.toolchain.version, result.jdk.version
-    );
-
-    if let Some(t) = target {
-        eprintln!("  target: {t}");
-    }
-    if let Some(p) = profile {
-        eprintln!("  profile: {p}");
+    if !result.success {
+        std::process::exit(1);
     }
 
     Ok(())
