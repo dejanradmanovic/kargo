@@ -241,11 +241,11 @@ pub enum Command {
         compare: Option<String>,
     },
 
-    /// Rebuild on file changes
+    /// Watch for file changes, rebuild and run
     Watch {
-        /// Command to run on changes
-        #[arg(short, long, default_value = "build")]
-        command: String,
+        /// Only build, don't run
+        #[arg(long)]
+        build_only: bool,
     },
 
     /// Publish to a Maven repository

@@ -63,6 +63,36 @@ pub fn assemble(project_root: &Path, lockfile: &Lockfile) -> Classpath {
     }
 }
 
+/// Standard Kotlin stdlib JARs needed for compilation.
+pub const STDLIB_JARS: &[&str] = &[
+    "kotlin-stdlib.jar",
+    "annotations-13.0.jar",
+    "kotlin-annotations-jvm.jar",
+];
+
+/// Extended stdlib JARs list including JDK-specific variants (for runtime).
+pub const STDLIB_RUNTIME_JARS: &[&str] = &[
+    "kotlin-stdlib.jar",
+    "kotlin-stdlib-jdk8.jar",
+    "kotlin-stdlib-jdk7.jar",
+];
+
+/// Build a classpath string that includes the Kotlin stdlib JARs.
+///
+/// Appends the standard stdlib JARs from `kotlin_home/lib/` to the given JARs,
+/// deduplicating by filename.
+pub fn classpath_string_with_stdlib(jars: &[PathBuf], kotlin_home: &Path) -> String {
+    let kotlin_lib = kotlin_home.join("lib");
+    let mut all: Vec<PathBuf> = jars.to_vec();
+    for name in STDLIB_JARS {
+        let jar = kotlin_lib.join(name);
+        if jar.is_file() && !all.iter().any(|p| p.ends_with(name)) {
+            all.push(jar);
+        }
+    }
+    to_classpath_string(&all)
+}
+
 /// Join JAR paths into a classpath string suitable for `-classpath`.
 pub fn to_classpath_string(jars: &[PathBuf]) -> String {
     jars.iter()

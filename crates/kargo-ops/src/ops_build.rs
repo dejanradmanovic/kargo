@@ -2,18 +2,21 @@
 //!
 //! Orchestrates the full build pipeline: preflight -> lockfile -> source discovery ->
 //! classpath assembly -> KSP/KAPT -> compilation -> resource copy.
+//!
+//! The pipeline is split into three phases:
+//! - [`run_annotation_processing`] — KSP/KAPT pre-build
+//! - [`run_main_compilation`] — fingerprinting, incremental check, kotlinc + javac
+//! - [`package_output`] — resource copy, JAR packaging
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use kargo_compiler::build_cache::BuildCache;
-use kargo_compiler::classpath;
 use kargo_compiler::dispatch::CompilerDispatch;
-use kargo_compiler::env::BuildEnv;
 use kargo_compiler::fingerprint;
 use kargo_compiler::incremental::{self, IncrementalDecision};
 use kargo_compiler::plugins;
-use kargo_compiler::source_set_discovery::{self, collect_kotlin_files};
+use kargo_compiler::source_set_discovery::collect_kotlin_files;
 use kargo_compiler::unit::CompilationUnit;
 use kargo_compiler::unit_graph::UnitGraph;
 use kargo_core::lockfile::Lockfile;
@@ -36,7 +39,7 @@ pub struct BuildOptions {
     pub quiet: bool,
 }
 
-/// Result of a build operation.
+/// Result of a build operation, carrying enough context for downstream ops.
 pub struct BuildResult {
     pub target: KotlinTarget,
     pub profile_name: String,
@@ -45,92 +48,53 @@ pub struct BuildResult {
     /// Path to the packaged output JAR, if produced.
     pub output_jar: Option<PathBuf>,
     pub success: bool,
+    /// Manifest loaded during build (avoids re-parsing in test/run).
+    pub manifest: Manifest,
+    /// Lockfile loaded during build (avoids re-parsing in test/run).
+    pub lockfile: Lockfile,
+    /// Preflight result (toolchain info) for reuse.
+    pub preflight: crate::ops_setup::PreflightResult,
+}
+
+/// Output from the compilation phase.
+struct CompilationOutput {
+    compiled: bool,
+    main_unit: CompilationUnit,
 }
 
 /// Run the full build pipeline.
 pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildResult> {
     let start = Instant::now();
-
     use kargo_util::progress::status;
 
-    // 1. Preflight
-    let preflight = ops_setup::preflight(project_dir)?;
+    let ctx = crate::BuildContext::load(
+        project_dir,
+        opts.target.as_deref(),
+        opts.profile.as_deref(),
+        opts.release,
+    )?;
+
     if opts.verbose {
-        ops_setup::print_preflight_summary(&preflight);
+        ops_setup::print_preflight_summary(&ctx.preflight);
         println!();
     }
 
-    // 2. Ensure lockfile
-    ops_setup::ensure_lockfile(project_dir)?;
-
-    // 3. Load manifest and lockfile
-    let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;
-    let lockfile = Lockfile::from_path(&project_dir.join("Kargo.lock"))?;
-
-    // 4. Determine target and profile
-    let target = resolve_target(&manifest, opts.target.as_deref())?;
-    let profile_name = resolve_profile(opts.profile.as_deref(), opts.release);
+    let target = ctx.target;
+    let profile_name = ctx.profile_name.clone();
 
     if !opts.quiet {
         status(
             "Compiling",
             &format!(
                 "{} v{} ({} {})",
-                manifest.package.name, manifest.package.version, target, profile_name
+                ctx.manifest.package.name, ctx.manifest.package.version, target, profile_name
             ),
         );
     }
-    let profile = manifest
-        .profile
-        .get(&profile_name)
-        .cloned()
-        .unwrap_or_else(|| {
-            if profile_name == "release" {
-                kargo_core::profile::Profile::release()
-            } else {
-                kargo_core::profile::Profile::dev()
-            }
-        });
 
-    let is_debug = profile.debug.unwrap_or(profile_name != "release");
-
-    // 5. Build output directory
-    let build_dir = project_dir
-        .join("build")
-        .join(target.kebab_name())
-        .join(&profile_name);
-    std::fs::create_dir_all(&build_dir).map_err(KargoError::Io)?;
-
-    let classes_dir = build_dir.join("classes");
-    let resources_dir = build_dir.join("resources");
-    let generated_dir = build_dir.join("generated");
-    std::fs::create_dir_all(&classes_dir).map_err(KargoError::Io)?;
-    std::fs::create_dir_all(&resources_dir).map_err(KargoError::Io)?;
-    std::fs::create_dir_all(&generated_dir).map_err(KargoError::Io)?;
-
-    // 6. Build environment
-    let config = kargo_core::config::GlobalConfig::load().unwrap_or_default();
-    let kotlin_ver = preflight.toolchain.version.to_string();
-    let env = BuildEnv::new(
-        &manifest,
-        project_dir,
-        &build_dir,
-        target.kebab_name(),
-        &profile_name,
-        &kotlin_ver,
-        &preflight.toolchain.home,
-        config.build.jobs,
-    );
-
-    // 7. Source discovery
-    let discovered = source_set_discovery::discover(project_dir, &manifest);
-
-    // 8. Classpath assembly
-    let cp = classpath::assemble(project_dir, &lockfile);
-
-    // 9. Collect main source files
+    // Collect main source files
     let mut all_kotlin_dirs: Vec<PathBuf> = Vec::new();
-    for ss in &discovered.main_sources {
+    for ss in &ctx.discovered.main_sources {
         all_kotlin_dirs.extend(ss.kotlin_dirs.clone());
     }
     let main_sources = collect_kotlin_files(&all_kotlin_dirs);
@@ -140,327 +104,53 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
         return Ok(BuildResult {
             target,
             profile_name,
-            build_dir: build_dir.clone(),
-            classes_dir,
+            build_dir: ctx.build_dir.clone(),
+            classes_dir: ctx.classes_dir.clone(),
             output_jar: None,
             success: true,
+            manifest: ctx.manifest,
+            lockfile: ctx.lockfile,
+            preflight: ctx.preflight,
         });
     }
 
-    // 10. Generate BuildConfig.kt
-    // Prefer explicit `group` for the Kotlin package; fall back to deriving it from `main-class`.
-    let kotlin_package = manifest
-        .package
-        .group
-        .clone()
-        .or_else(|| {
-            manifest
-                .package
-                .main_class
-                .as_deref()
-                .and_then(kargo_compiler::buildconfig::package_from_main_class)
-        });
+    // Generate BuildConfig.kt
+    generate_build_config(&ctx, &profile_name)?;
 
-    // Start with base [build-config], then merge flavor-specific values on top.
-    // Flavor values override base values when keys collide.
-    let mut build_config_fields = manifest.build_config.clone();
-    if let Some(ref flavors) = manifest.flavors {
-        // TODO: honour --flavor / --variant CLI flags once variant selection lands.
-        // For now, use the declared default flavors (if any).
-        let selected: std::collections::BTreeMap<String, String> = flavors
-            .default
-            .clone()
-            .unwrap_or_default();
+    // Phase 1: Annotation processing
+    let cache = kargo_maven::cache::LocalCache::new(project_dir);
+    let processors = plugins::detect_processors(&ctx.manifest, &cache);
 
-        for (dimension, flavor_name) in &selected {
-            if let Some(dim_map) = flavors.dimension_flavors.get(dimension) {
-                if let Some(def) = dim_map.get(flavor_name) {
-                    for (k, v) in &def.build_config {
-                        build_config_fields.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let _buildconfig_path = kargo_compiler::buildconfig::generate(
-        &generated_dir,
-        kotlin_package.as_deref(),
-        &manifest.package.name,
-        &manifest.package.version,
-        &profile_name,
-        is_debug,
-        &build_config_fields,
+    run_annotation_processing(
+        &ctx,
+        &processors,
+        &main_sources,
+        &all_kotlin_dirs,
+        &cache,
+        opts,
     )?;
 
-    // 11. KSP/KAPT annotation processing — run as a pre-build step
-    let cache = kargo_maven::cache::LocalCache::new(project_dir);
-    let processors = plugins::detect_processors(&manifest, &cache);
-    let generated_source_dirs: Vec<PathBuf> = vec![generated_dir.clone()];
-    #[allow(unused_assignments)]
-    let mut ksp_toolchain: Option<plugins::KspToolchain> = None;
+    // Phase 2: Main compilation
+    let comp_output = run_main_compilation(
+        &ctx,
+        &processors,
+        &main_sources,
+        &cache,
+        opts,
+    )?;
 
-    if !processors.is_empty() {
-        // Quick mtime check: skip annotation processing entirely if sources,
-        // processor JARs and Kargo.toml haven't changed since the last run.
-        let ap_fp_dir = fingerprint::storage_dir(project_dir, target.kebab_name(), &profile_name);
-        let ap_needed = annotation_processing_needed(
-            &main_sources,
-            &processors,
-            &cache,
-            project_dir,
-            &generated_dir,
-            &ap_fp_dir,
-        );
-
-        if !ap_needed {
-            if opts.verbose {
-                println!("  annotation processing: up-to-date (skipped)");
-            }
-        } else {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
-                message: format!("Failed to create async runtime: {e}"),
-            })?;
-            rt.block_on(plugins::ensure_processor_jars(&processors, &cache))?;
-
-            // --- KSP pre-build ---
-            let has_ksp = processors
-                .iter()
-                .any(|p| p.kind == plugins::ProcessorKind::Ksp);
-
-            if has_ksp {
-                let ksp_version = plugins::resolve_ksp_version(&manifest);
-                ksp_toolchain =
-                    rt.block_on(plugins::ensure_ksp_toolchain(&cache, &ksp_version))?;
-
-                if let Some(ref ksp) = ksp_toolchain {
-                    let java_target_str = &preflight.java_target;
-
-                    match ksp {
-                        plugins::KspToolchain::Ksp2 { .. } => {
-                            let ran = plugins::run_ksp2_standalone(
-                                ksp,
-                                &processors,
-                                &cache,
-                                &all_kotlin_dirs,
-                                &cp.compile_jars,
-                                &cp.processor_jars,
-                                &preflight.toolchain.home,
-                                &preflight.jdk.home,
-                                java_target_str,
-                                project_dir,
-                                &generated_dir,
-                                &manifest.package.name,
-                                &manifest.ksp_options,
-                            )?;
-                            if ran && !opts.quiet {
-                                status("Running", "KSP2 annotation processing");
-                            }
-                        }
-                        plugins::KspToolchain::Ksp1 { .. } => {
-                            run_ksp1_pass(
-                                ksp,
-                                &processors,
-                                &cache,
-                                &main_sources,
-                                &cp.compile_jars,
-                                &cp.processor_jars,
-                                &preflight.toolchain.home,
-                                &preflight.jdk.home,
-                                project_dir,
-                                &generated_dir,
-                                &profile,
-                                &manifest.ksp_options,
-                            )?;
-                            if !opts.quiet {
-                                status("Running", "KSP1 annotation processing");
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- KAPT pre-build ---
-            let has_kapt = processors
-                .iter()
-                .any(|p| p.kind == plugins::ProcessorKind::Kapt);
-
-            if has_kapt {
-                let generated = plugins::run_kapt_pass(
-                    &processors,
-                    &cache,
-                    &main_sources,
-                    &cp.compile_jars,
-                    &cp.processor_jars,
-                    &preflight.toolchain.home,
-                    &generated_dir,
-                    &profile,
-                )?;
-                if generated && !opts.quiet {
-                    status("Running", "KAPT annotation processing");
-                }
-            }
-
-            // Mark annotation processing complete so we can skip next time
-            mark_annotation_processing_done(
-                &main_sources,
-                &processors,
-                &cache,
-                project_dir,
-                &ap_fp_dir,
-            );
-        }
+    if !comp_output.compiled && !comp_output.main_unit.sources.is_empty() {
+        // Check for failed build
     }
 
-    // 12. Build main compilation unit
-    let mut compile_classpath = cp.compile_jars.clone();
+    // Phase 3: Package output
+    let output_jar = package_output(&ctx, comp_output.compiled)?;
 
-    // Kotlin stdlib from the toolchain (always needed for compilation)
-    let kotlin_lib = preflight.toolchain.home.join("lib");
-    for jar_name in &[
-        "kotlin-stdlib.jar",
-        "kotlin-stdlib-jdk8.jar",
-        "kotlin-stdlib-jdk7.jar",
-    ] {
-        let jar = kotlin_lib.join(jar_name);
-        if jar.is_file()
-            && !compile_classpath
-                .iter()
-                .any(|p| p.file_name() == jar.file_name())
-        {
-            compile_classpath.push(jar);
-        }
-    }
-
-    // Auto-detect Kotlin compiler plugins from dependencies
-    let mut compiler_args = profile.compiler_args.clone();
-    detect_compiler_plugins(&lockfile, &preflight.toolchain.home, &mut compiler_args);
-
-    // Check if KAPT generated Java sources that need javac compilation
-    let kapt_sources_dir = generated_dir.join("kapt").join("sources");
-    let has_kapt_java = kapt_sources_dir.is_dir() && plugins::walkdir_has_java(&kapt_sources_dir);
-
-    // Collect processor JAR paths for fingerprinting
-    let processor_jar_paths: Vec<PathBuf> = processors
-        .iter()
-        .filter_map(|p| cache.get_jar(&p.group, &p.artifact, &p.version, None))
-        .collect();
-
-    let main_unit = CompilationUnit {
-        name: "main".into(),
-        target,
-        sources: main_sources,
-        resource_dirs: discovered
-            .main_sources
-            .iter()
-            .flat_map(|ss| ss.resource_dirs.clone())
-            .collect(),
-        classpath: compile_classpath,
-        output_dir: classes_dir.clone(),
-        compiler_args,
-        is_test: false,
-        generated_sources: generated_source_dirs,
-        processor_jars: processor_jar_paths,
-    };
-
-    // 13. Unit graph (main only for `kargo build`)
-    let mut graph = UnitGraph::new();
-    graph.add_unit(main_unit.clone());
-
-    // 14. Incremental build check (fingerprints stored in .kargo/)
-    let fp_dir = fingerprint::storage_dir(project_dir, target.kebab_name(), &profile_name);
-    let decision = incremental::check(&main_unit, &fp_dir, &kotlin_ver);
-    let mut compiled = false;
-
-    match decision {
-        IncrementalDecision::UpToDate => {
-            if opts.verbose {
-                println!("  main: up-to-date (skipped)");
-            }
-        }
-        IncrementalDecision::NeedsRebuild(fp) => {
-            let build_cache = BuildCache::new(BuildCache::default_path(), None);
-            if build_cache.restore(&fp, &classes_dir)? {
-                if opts.verbose {
-                    println!("  main: restored from cache");
-                }
-                incremental::mark_complete(&fp_dir, "main", &fp, &main_unit)?;
-                compiled = true;
-            } else {
-                let compiler = CompilerDispatch::resolve(
-                    target,
-                    preflight.toolchain.clone(),
-                    preflight.jdk.home.clone(),
-                    preflight.java_target.clone(),
-                );
-
-                let output = compiler.compile(&main_unit, &env)?;
-
-                if !output.success {
-                    print_diagnostics(&output.diagnostics);
-                    return Ok(BuildResult {
-                        target,
-                        profile_name,
-                        build_dir,
-                        classes_dir,
-                        output_jar: None,
-                        success: false,
-                    });
-                }
-
-                if !output.diagnostics.is_empty() && opts.verbose {
-                    print_diagnostics(&output.diagnostics);
-                }
-
-                // Compile KAPT-generated Java sources with javac (kotlinc doesn't compile them)
-                if has_kapt_java {
-                    compile_kapt_java(
-                        &preflight.jdk.home,
-                        &kapt_sources_dir,
-                        &classes_dir,
-                        &main_unit.classpath,
-                        &preflight.java_target,
-                    )?;
-                }
-
-                incremental::mark_complete(&fp_dir, "main", &fp, &main_unit)?;
-                let _ = build_cache.put(&fp, &classes_dir);
-                compiled = true;
-            }
-        }
-    }
-
-    // 15. Copy resources
-    copy_resources(&main_unit.resource_dirs, &resources_dir);
-
-    // 16. Package output JAR (skip if nothing was compiled)
-    let output_jar = if compiled {
-        let output_dir = build_dir.join("output");
-        std::fs::create_dir_all(&output_dir).map_err(KargoError::Io)?;
-        let jar_name = format!("{}-{}.jar", manifest.package.name, manifest.package.version);
-        let jar_path = output_dir.join(&jar_name);
-        package_jar(
-            &preflight.jdk.home,
-            &classes_dir,
-            &resources_dir,
-            &jar_path,
-            manifest.package.main_class.as_deref(),
-        )?
-    } else {
-        let jar_name = format!("{}-{}.jar", manifest.package.name, manifest.package.version);
-        let jar_path = build_dir.join("output").join(&jar_name);
-        if jar_path.is_file() {
-            Some(jar_path)
-        } else {
-            None
-        }
-    };
-
-    // 17. Print summary (suppressed in quiet mode)
+    // Print summary
     if !opts.quiet {
         let elapsed = start.elapsed();
-        let file_count = main_unit.sources.len();
-        if compiled {
+        let file_count = comp_output.main_unit.sources.len();
+        if comp_output.compiled {
             status(
                 "Finished",
                 &format!(
@@ -495,44 +185,357 @@ pub fn build(project_dir: &Path, opts: &BuildOptions) -> miette::Result<BuildRes
     Ok(BuildResult {
         target,
         profile_name,
-        build_dir,
-        classes_dir,
+        build_dir: ctx.build_dir.clone(),
+        classes_dir: ctx.classes_dir.clone(),
         output_jar,
         success: true,
+        manifest: ctx.manifest,
+        lockfile: ctx.lockfile,
+        preflight: ctx.preflight,
     })
 }
 
-fn resolve_target(manifest: &Manifest, target_arg: Option<&str>) -> miette::Result<KotlinTarget> {
-    let target_name = target_arg
-        .or_else(|| manifest.targets.keys().next().map(|s| s.as_str()))
-        .unwrap_or("jvm");
+// ---------------------------------------------------------------------------
+// Phase 1: Annotation processing (KSP/KAPT)
+// ---------------------------------------------------------------------------
 
-    KotlinTarget::parse(target_name).ok_or_else(|| {
-        KargoError::Generic {
-            message: format!(
-                "Unknown target '{}'. Available targets: {}",
-                target_name,
-                manifest
-                    .targets
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+fn run_annotation_processing(
+    ctx: &crate::BuildContext,
+    processors: &[plugins::ProcessorInfo],
+    main_sources: &[PathBuf],
+    all_kotlin_dirs: &[PathBuf],
+    cache: &kargo_maven::cache::LocalCache,
+    opts: &BuildOptions,
+) -> miette::Result<()> {
+    use kargo_util::progress::status;
+
+    if processors.is_empty() {
+        return Ok(());
+    }
+
+    let ap_fp_dir =
+        fingerprint::storage_dir(&ctx.project_dir, ctx.target.kebab_name(), &ctx.profile_name);
+    let ap_needed = annotation_processing_needed(
+        main_sources,
+        processors,
+        cache,
+        &ctx.project_dir,
+        &ctx.generated_dir,
+        &ap_fp_dir,
+    );
+
+    if !ap_needed {
+        if opts.verbose {
+            println!("  annotation processing: up-to-date (skipped)");
         }
-        .into()
+        return Ok(());
+    }
+
+    let rt = tokio::runtime::Runtime::new().map_err(|e| KargoError::Generic {
+        message: format!("Failed to create async runtime: {e}"),
+    })?;
+    rt.block_on(plugins::ensure_processor_jars(processors, cache))?;
+
+    // KSP pre-build
+    let has_ksp = processors
+        .iter()
+        .any(|p| p.kind == plugins::ProcessorKind::Ksp);
+
+    if has_ksp {
+        let ksp_version = plugins::resolve_ksp_version(&ctx.manifest);
+        let ksp_toolchain = rt.block_on(plugins::ensure_ksp_toolchain(cache, &ksp_version))?;
+
+        if let Some(ref ksp) = ksp_toolchain {
+            match ksp {
+                plugins::KspToolchain::Ksp2 { .. } => {
+                    let ran = plugins::run_ksp2_standalone(
+                        ksp,
+                        processors,
+                        cache,
+                        all_kotlin_dirs,
+                        &ctx.classpath.compile_jars,
+                        &ctx.classpath.processor_jars,
+                        &ctx.preflight.toolchain.home,
+                        &ctx.preflight.jdk.home,
+                        &ctx.preflight.java_target,
+                        &ctx.project_dir,
+                        &ctx.generated_dir,
+                        &ctx.manifest.package.name,
+                        &ctx.manifest.ksp_options,
+                    )?;
+                    if ran && !opts.quiet {
+                        status("Running", "KSP2 annotation processing");
+                    }
+                }
+                plugins::KspToolchain::Ksp1 { .. } => {
+                    run_ksp1_pass(
+                        ksp,
+                        processors,
+                        cache,
+                        main_sources,
+                        &ctx.classpath.compile_jars,
+                        &ctx.classpath.processor_jars,
+                        &ctx.preflight.toolchain.home,
+                        &ctx.preflight.jdk.home,
+                        &ctx.project_dir,
+                        &ctx.generated_dir,
+                        &ctx.profile,
+                        &ctx.manifest.ksp_options,
+                    )?;
+                    if !opts.quiet {
+                        status("Running", "KSP1 annotation processing");
+                    }
+                }
+            }
+        }
+    }
+
+    // KAPT pre-build
+    let has_kapt = processors
+        .iter()
+        .any(|p| p.kind == plugins::ProcessorKind::Kapt);
+
+    if has_kapt {
+        let generated = plugins::run_kapt_pass(
+            processors,
+            cache,
+            main_sources,
+            &ctx.classpath.compile_jars,
+            &ctx.classpath.processor_jars,
+            &ctx.preflight.toolchain.home,
+            &ctx.generated_dir,
+            &ctx.profile,
+        )?;
+        if generated && !opts.quiet {
+            status("Running", "KAPT annotation processing");
+        }
+    }
+
+    mark_annotation_processing_done(main_sources, processors, cache, &ctx.project_dir, &ap_fp_dir);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Main compilation
+// ---------------------------------------------------------------------------
+
+fn run_main_compilation(
+    ctx: &crate::BuildContext,
+    processors: &[plugins::ProcessorInfo],
+    main_sources: &[PathBuf],
+    cache: &kargo_maven::cache::LocalCache,
+    opts: &BuildOptions,
+) -> miette::Result<CompilationOutput> {
+    let mut compile_classpath = ctx.classpath.compile_jars.clone();
+
+    let kotlin_lib = ctx.preflight.toolchain.home.join("lib");
+    for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS {
+        let jar = kotlin_lib.join(jar_name);
+        if jar.is_file()
+            && !compile_classpath
+                .iter()
+                .any(|p| p.file_name() == jar.file_name())
+        {
+            compile_classpath.push(jar);
+        }
+    }
+
+    let mut compiler_args = ctx.profile.compiler_args.clone();
+    detect_compiler_plugins(&ctx.lockfile, &ctx.preflight.toolchain.home, &mut compiler_args);
+
+    let kapt_sources_dir = ctx.generated_dir.join("kapt").join("sources");
+    let has_kapt_java = kapt_sources_dir.is_dir() && plugins::walkdir_has_java(&kapt_sources_dir);
+
+    let processor_jar_paths: Vec<PathBuf> = processors
+        .iter()
+        .filter_map(|p| cache.get_jar(&p.group, &p.artifact, &p.version, None))
+        .collect();
+
+    let main_unit = CompilationUnit {
+        name: "main".into(),
+        target: ctx.target,
+        sources: main_sources.to_vec(),
+        resource_dirs: ctx
+            .discovered
+            .main_sources
+            .iter()
+            .flat_map(|ss| ss.resource_dirs.clone())
+            .collect(),
+        classpath: compile_classpath,
+        output_dir: ctx.classes_dir.clone(),
+        compiler_args,
+        is_test: false,
+        generated_sources: vec![ctx.generated_dir.clone()],
+        processor_jars: processor_jar_paths,
+    };
+
+    let mut graph = UnitGraph::new();
+    graph.add_unit(main_unit.clone());
+
+    let kotlin_ver = ctx.preflight.toolchain.version.to_string();
+    let fp_dir =
+        fingerprint::storage_dir(&ctx.project_dir, ctx.target.kebab_name(), &ctx.profile_name);
+    let decision = incremental::check(&main_unit, &fp_dir, &kotlin_ver);
+    let mut compiled = false;
+
+    match decision {
+        IncrementalDecision::UpToDate => {
+            if opts.verbose {
+                println!("  main: up-to-date (skipped)");
+            }
+        }
+        IncrementalDecision::NeedsRebuild(fp) => {
+            let build_cache = BuildCache::new(BuildCache::default_path(), None);
+            if build_cache.restore(&fp, &ctx.classes_dir)? {
+                if opts.verbose {
+                    println!("  main: restored from cache");
+                }
+                incremental::mark_complete(&fp_dir, "main", &fp, &main_unit)?;
+                compiled = true;
+            } else {
+                let compiler = CompilerDispatch::resolve(
+                    ctx.target,
+                    ctx.preflight.toolchain.clone(),
+                    ctx.preflight.jdk.home.clone(),
+                    ctx.preflight.java_target.clone(),
+                );
+
+                let output = compiler.compile(&main_unit, &ctx.env)?;
+
+                if !output.success {
+                    print_diagnostics(&output.diagnostics);
+                    return Err(KargoError::Generic {
+                        message: "Compilation failed.".into(),
+                    }
+                    .into());
+                }
+
+                if !output.diagnostics.is_empty() && opts.verbose {
+                    print_diagnostics(&output.diagnostics);
+                }
+
+                if has_kapt_java {
+                    compile_kapt_java(
+                        &ctx.preflight.jdk.home,
+                        &kapt_sources_dir,
+                        &ctx.classes_dir,
+                        &main_unit.classpath,
+                        &ctx.preflight.java_target,
+                    )?;
+                }
+
+                incremental::mark_complete(&fp_dir, "main", &fp, &main_unit)?;
+                let _ = build_cache.put(&fp, &ctx.classes_dir);
+                compiled = true;
+            }
+        }
+    }
+
+    Ok(CompilationOutput {
+        compiled,
+        main_unit,
     })
 }
 
-fn resolve_profile(profile_arg: Option<&str>, release: bool) -> String {
-    if let Some(p) = profile_arg {
-        p.to_string()
-    } else if release {
-        "release".to_string()
+// ---------------------------------------------------------------------------
+// Phase 3: Package output
+// ---------------------------------------------------------------------------
+
+fn package_output(
+    ctx: &crate::BuildContext,
+    compiled: bool,
+) -> miette::Result<Option<PathBuf>> {
+    // Copy resources
+    let resource_dirs: Vec<PathBuf> = ctx
+        .discovered
+        .main_sources
+        .iter()
+        .flat_map(|ss| ss.resource_dirs.clone())
+        .collect();
+    copy_resources(&resource_dirs, &ctx.resources_dir);
+
+    if compiled {
+        let output_dir = ctx.build_dir.join("output");
+        std::fs::create_dir_all(&output_dir).map_err(KargoError::Io)?;
+        let jar_name = format!(
+            "{}-{}.jar",
+            ctx.manifest.package.name, ctx.manifest.package.version
+        );
+        let jar_path = output_dir.join(&jar_name);
+        package_jar(
+            &ctx.preflight.jdk.home,
+            &ctx.classes_dir,
+            &ctx.resources_dir,
+            &jar_path,
+            ctx.manifest.package.main_class.as_deref(),
+        )
     } else {
-        "dev".to_string()
+        let jar_name = format!(
+            "{}-{}.jar",
+            ctx.manifest.package.name, ctx.manifest.package.version
+        );
+        let jar_path = ctx.build_dir.join("output").join(&jar_name);
+        if jar_path.is_file() {
+            Ok(Some(jar_path))
+        } else {
+            Ok(None)
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// BuildConfig generation
+// ---------------------------------------------------------------------------
+
+fn generate_build_config(
+    ctx: &crate::BuildContext,
+    profile_name: &str,
+) -> miette::Result<PathBuf> {
+    let is_debug = ctx.profile.debug.unwrap_or(profile_name != "release");
+
+    let kotlin_package = ctx
+        .manifest
+        .package
+        .group
+        .clone()
+        .or_else(|| {
+            ctx.manifest
+                .package
+                .main_class
+                .as_deref()
+                .and_then(kargo_compiler::buildconfig::package_from_main_class)
+        });
+
+    let mut build_config_fields = ctx.manifest.build_config.clone();
+    if let Some(ref flavors) = ctx.manifest.flavors {
+        let selected: std::collections::BTreeMap<String, String> =
+            flavors.default.clone().unwrap_or_default();
+
+        for (dimension, flavor_name) in &selected {
+            if let Some(dim_map) = flavors.dimension_flavors.get(dimension) {
+                if let Some(def) = dim_map.get(flavor_name) {
+                    for (k, v) in &def.build_config {
+                        build_config_fields.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    kargo_compiler::buildconfig::generate(
+        &ctx.generated_dir,
+        kotlin_package.as_deref(),
+        &ctx.manifest.package.name,
+        &ctx.manifest.package.version,
+        profile_name,
+        is_debug,
+        &build_config_fields,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
 
 fn copy_resources(resource_dirs: &[PathBuf], target: &Path) {
     for dir in resource_dirs {
@@ -572,7 +575,6 @@ fn package_jar(
         return Ok(None);
     }
 
-    // Only package if there are actual class files
     let has_classes = classes_dir.is_dir()
         && std::fs::read_dir(classes_dir)
             .map(|rd| rd.flatten().next().is_some())
@@ -583,18 +585,15 @@ fn package_jar(
 
     let mut args = vec!["cf".to_string(), jar_path.to_string_lossy().to_string()];
 
-    // If main class is set, create a manifest with Main-Class entry
     if let Some(mc) = main_class {
         args[0] = "cfe".to_string();
         args.insert(2, mc.to_string());
     }
 
-    // Add classes
     args.push("-C".into());
     args.push(classes_dir.to_string_lossy().to_string());
     args.push(".".into());
 
-    // Add resources if present
     if resources_dir.is_dir()
         && std::fs::read_dir(resources_dir)
             .map(|rd| rd.flatten().next().is_some())
@@ -623,9 +622,6 @@ fn package_jar(
 }
 
 /// Auto-detect Kotlin compiler plugins needed based on resolved dependencies.
-///
-/// Currently detected plugins:
-/// - `kotlinx-serialization-compiler-plugin` when any `kotlinx-serialization-*` dep is present
 pub fn detect_compiler_plugins(
     lockfile: &Lockfile,
     kotlin_home: &Path,
@@ -650,10 +646,6 @@ pub fn detect_compiler_plugins(
 }
 
 /// Run KSP1 as a separate `kotlinc` pass with `-Xplugin`.
-///
-/// This compiles the annotated sources with the KSP1 compiler plugin,
-/// which generates `.kt` files into `generated_dir/ksp/kotlin/`.
-/// The compilation output is discarded — only the generated sources matter.
 fn run_ksp1_pass(
     ksp: &plugins::KspToolchain,
     processors: &[plugins::ProcessorInfo],
@@ -685,15 +677,12 @@ fn run_ksp1_pass(
     std::fs::create_dir_all(&ksp_classes).map_err(KargoError::Io)?;
 
     let kotlinc = kotlin_home.join("bin").join("kotlinc");
-
     let mut cmd = kargo_util::process::CommandBuilder::new(kotlinc.to_string_lossy().to_string());
 
-    // Add KSP plugin args
     for arg in &ksp_args {
         cmd = cmd.arg(arg);
     }
 
-    // Add serialization plugin if needed (so KSP can analyze @Serializable types)
     for arg in &profile.compiler_args {
         if arg.contains("Xplugin") {
             cmd = cmd.arg(arg);
@@ -706,16 +695,13 @@ fn run_ksp1_pass(
         cmd = cmd.arg(format!("-Xplugin={}", serial_plugin.to_string_lossy()));
     }
 
-    // Classpath
     if !library_jars.is_empty() {
         let cp = crate::classpath_string_with_stdlib(library_jars, kotlin_home);
         cmd = cmd.arg("-classpath").arg(&cp);
     }
 
-    // Output (discarded after KSP generates sources)
     cmd = cmd.arg("-d").arg(ksp_classes.to_string_lossy().to_string());
 
-    // Source files (exclude files that reference KSP-generated code)
     for src in sources {
         if !plugins::references_generated_imports(src) {
             cmd = cmd.arg(src.to_string_lossy().to_string());
@@ -728,9 +714,6 @@ fn run_ksp1_pass(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // KSP1 pass may fail if some source files reference generated code,
-        // but the important thing is that KSP generated its output.
-        // Only fail if KSP itself reported errors.
         if stderr.contains("e: ") && !stderr.contains("unresolved reference") {
             return Err(KargoError::Generic {
                 message: format!("KSP1 annotation processing failed:\n{stderr}"),
@@ -739,17 +722,12 @@ fn run_ksp1_pass(
         }
     }
 
-    // Clean up the throwaway class output
     let _ = std::fs::remove_dir_all(&ksp_classes);
 
     Ok(())
 }
 
 /// Compile KAPT-generated Java sources with `javac`.
-/// `kotlinc` doesn't compile Java sources to bytecode — it only uses them
-/// for type resolution. We need a separate `javac` pass that puts the
-/// compiled Kotlin classes on the classpath so the generated Java code can
-/// reference them.
 fn compile_kapt_java(
     jdk_home: &Path,
     java_source_dir: &Path,
@@ -765,14 +743,12 @@ fn compile_kapt_java(
         .into());
     }
 
-    // Collect all .java files
     let mut java_files = Vec::new();
     collect_java_files(java_source_dir, &mut java_files);
     if java_files.is_empty() {
         return Ok(());
     }
 
-    // Build classpath: compiled Kotlin classes + dependency JARs
     let mut cp_parts: Vec<String> = vec![classes_dir.to_string_lossy().to_string()];
     for jar in classpath {
         cp_parts.push(jar.to_string_lossy().to_string());
@@ -841,11 +817,9 @@ fn print_diagnostics(diagnostics: &[kargo_compiler::unit::Diagnostic]) {
 }
 
 // ---------------------------------------------------------------------------
-// Annotation processing (KSP/KAPT) mtime-based skip logic
+// Annotation processing mtime-based skip logic
 // ---------------------------------------------------------------------------
 
-/// Compute the max mtime across all annotation processing inputs:
-/// source files, processor JARs, and Kargo.toml.
 fn ap_inputs_max_mtime(
     sources: &[PathBuf],
     processors: &[plugins::ProcessorInfo],
@@ -855,7 +829,6 @@ fn ap_inputs_max_mtime(
     use std::time::SystemTime;
 
     let mut max = 0u64;
-
     let mtime_of = |p: &Path| -> u64 {
         p.metadata()
             .ok()
@@ -877,9 +850,6 @@ fn ap_inputs_max_mtime(
     max
 }
 
-/// Check whether annotation processing needs to run.
-/// Returns `false` when all inputs are older than the last successful run
-/// AND the generated output directory still exists with content.
 fn annotation_processing_needed(
     sources: &[PathBuf],
     processors: &[plugins::ProcessorInfo],
@@ -888,8 +858,23 @@ fn annotation_processing_needed(
     generated_dir: &Path,
     fp_dir: &Path,
 ) -> bool {
-    // If generated output was deleted (e.g. `kargo clean`), always re-run
-    if !generated_dir.is_dir() || dir_is_empty(generated_dir) {
+    // Check if the processor-specific output dirs exist. The top-level
+    // generated_dir may contain BuildConfig.kt (written before AP runs),
+    // so we must check for actual AP output: kapt/sources or ksp/kotlin.
+    let has_kapt = processors
+        .iter()
+        .any(|p| p.kind == plugins::ProcessorKind::Kapt);
+    let has_ksp = processors
+        .iter()
+        .any(|p| p.kind == plugins::ProcessorKind::Ksp);
+
+    let kapt_output = generated_dir.join("kapt").join("sources");
+    let ksp_output = generated_dir.join("ksp").join("kotlin");
+
+    let ap_output_exists = (has_kapt && kapt_output.is_dir() && !dir_is_empty(&kapt_output))
+        || (has_ksp && ksp_output.is_dir() && !dir_is_empty(&ksp_output));
+
+    if !ap_output_exists {
         return true;
     }
 
@@ -906,7 +891,6 @@ fn annotation_processing_needed(
     current > stored
 }
 
-/// Write the annotation processing mtime marker after a successful run.
 fn mark_annotation_processing_done(
     sources: &[PathBuf],
     processors: &[plugins::ProcessorInfo],

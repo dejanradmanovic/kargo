@@ -20,6 +20,11 @@ impl LocalCache {
         }
     }
 
+    /// Create a cache from an already-resolved root path.
+    pub fn from_root(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     /// The root directory of this cache.
     pub fn root(&self) -> &Path {
         &self.root
@@ -188,8 +193,22 @@ fn collect_version_dirs(
             // This is a version dir: reconstruct group:artifact:version from path
             if let Some(coord) = reconstruct_coordinate(root, &path) {
                 if !keep.contains(&coord) {
-                    let _ = fs::remove_dir_all(&path);
-                    *removed += 1;
+                    // Only prune if the directory has a JAR (not just a POM).
+                    // The resolver caches POM files for versions that don't
+                    // win "nearest wins"; those POM-only dirs are harmless.
+                    let has_jar = fs::read_dir(&path)
+                        .map(|rd| {
+                            rd.flatten().any(|e| {
+                                e.path()
+                                    .extension()
+                                    .is_some_and(|ext| ext == "jar")
+                            })
+                        })
+                        .unwrap_or(false);
+                    if has_jar {
+                        let _ = fs::remove_dir_all(&path);
+                        *removed += 1;
+                    }
                 }
             }
         } else {

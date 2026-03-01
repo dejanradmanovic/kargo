@@ -19,6 +19,7 @@ mod test_;
 mod toolchain;
 mod tree;
 mod update;
+mod watch;
 
 use miette::Result;
 
@@ -83,6 +84,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             dry_run,
         } => update::exec(major, dep, dry_run),
         Command::Audit { fail_on } => audit::exec(fail_on),
+        Command::Watch { build_only } => watch::exec(build_only, cli.verbose),
         _ => {
             eprintln!("This command is not yet implemented");
             Ok(())

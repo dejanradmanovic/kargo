@@ -12,10 +12,8 @@ use kargo_compiler::dispatch::CompilerDispatch;
 use kargo_compiler::env::BuildEnv;
 use kargo_compiler::fingerprint;
 use kargo_compiler::incremental::{self, IncrementalDecision};
-use kargo_compiler::source_set_discovery::{self, collect_kotlin_files};
+use kargo_compiler::source_set_discovery::collect_kotlin_files;
 use kargo_compiler::unit::CompilationUnit;
-use kargo_core::lockfile::Lockfile;
-use kargo_core::manifest::Manifest;
 use kargo_maven::cache::LocalCache;
 use kargo_util::errors::KargoError;
 
@@ -34,7 +32,6 @@ pub fn test(
 ) -> miette::Result<()> {
     use kargo_util::progress::status;
 
-    // 1. Build main sources first (quiet mode to avoid mixing output)
     let build_result = ops_build::build(
         project_dir,
         &BuildOptions {
@@ -52,14 +49,14 @@ pub fn test(
         .into());
     }
 
-    // 2. Load manifest and lockfile
-    let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;
-    let lockfile = Lockfile::from_path(&project_dir.join("Kargo.lock"))
-        .unwrap_or(Lockfile { package: vec![] });
+    // Reuse manifest, lockfile, and preflight from the build result
+    let manifest = &build_result.manifest;
+    let lockfile = &build_result.lockfile;
+    let preflight = &build_result.preflight;
 
-    // 3. Discover test sources
-    let discovered = source_set_discovery::discover(project_dir, &manifest);
-    let mut test_kotlin_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let discovered =
+        kargo_compiler::source_set_discovery::discover(project_dir, manifest);
+    let mut test_kotlin_dirs: Vec<PathBuf> = Vec::new();
     for ss in &discovered.test_sources {
         test_kotlin_dirs.extend(ss.kotlin_dirs.clone());
     }
@@ -75,17 +72,20 @@ pub fn test(
         &format!("{} v{}", manifest.package.name, manifest.package.version),
     );
 
-    // 4. Compile test sources
-    let preflight = crate::ops_setup::preflight(project_dir)?;
-    let config = kargo_core::config::GlobalConfig::load().unwrap_or_default();
+    let config = match kargo_core::config::GlobalConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to load global config, using defaults: {e}");
+            kargo_core::config::GlobalConfig::default()
+        }
+    };
 
     let test_classes_dir = build_result.build_dir.join("test-classes");
     std::fs::create_dir_all(&test_classes_dir).map_err(KargoError::Io)?;
 
-    let cp = classpath::assemble(project_dir, &lockfile);
+    let cp = classpath::assemble(project_dir, lockfile);
     let mut test_classpath = vec![build_result.classes_dir.clone()];
 
-    // Include KSP/KAPT generated classes directories on the test classpath
     let gen_base = build_result.build_dir.join("generated");
     for subdir in &["ksp/classes", "kapt/classes"] {
         let dir = gen_base.join(subdir);
@@ -96,16 +96,11 @@ pub fn test(
 
     test_classpath.extend(cp.test_jars.clone());
 
-    // Include Kotlin runtime + test JARs from the toolchain
     let kotlin_lib = preflight.toolchain.home.join("lib");
-    for jar_name in &[
-        "kotlin-stdlib.jar",
-        "kotlin-stdlib-jdk8.jar",
-        "kotlin-stdlib-jdk7.jar",
-        "kotlin-test.jar",
-        "kotlin-test-junit5.jar",
-        "kotlin-test-junit.jar",
-    ] {
+    for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS
+        .iter()
+        .chain(&["kotlin-test.jar", "kotlin-test-junit5.jar", "kotlin-test-junit.jar"])
+    {
         let jar = kotlin_lib.join(jar_name);
         if jar.is_file()
             && !test_classpath
@@ -116,13 +111,7 @@ pub fn test(
         }
     }
 
-    // Auto-provision JUnit 5 when kotlin-test is used.
-    // kotlin-test-junit5.jar (from the toolchain) defines typealiases like
-    //   kotlin.test.Test -> org.junit.jupiter.api.Test
-    // but the actual JUnit 5 framework must be on the classpath.
-    // junit-platform-console-standalone is a fat JAR that bundles the full
-    // JUnit 5 API + engine + launcher in one artifact.
-    let junit_standalone = ensure_junit_platform(project_dir, &lockfile)?;
+    let junit_standalone = ensure_junit_platform(project_dir, lockfile)?;
     if let Some(ref jar) = junit_standalone {
         test_classpath.push(jar.clone());
     }
@@ -135,7 +124,7 @@ pub fn test(
 
     let mut test_compiler_args = profile.compiler_args.clone();
     crate::ops_build::detect_compiler_plugins(
-        &lockfile,
+        lockfile,
         &preflight.toolchain.home,
         &mut test_compiler_args,
     );
@@ -158,7 +147,7 @@ pub fn test(
     };
     let kotlin_ver = preflight.toolchain.version.to_string();
     let env = BuildEnv::new(
-        &manifest,
+        manifest,
         project_dir,
         &build_result.build_dir,
         build_result.target.kebab_name(),
@@ -168,7 +157,6 @@ pub fn test(
         config.build.jobs,
     );
 
-    // Incremental check for test compilation (fingerprints in .kargo/)
     let fp_dir = fingerprint::storage_dir(
         project_dir,
         build_result.target.kebab_name(),
@@ -231,21 +219,15 @@ pub fn test(
         build_result.classes_dir.to_string_lossy().to_string(),
     ];
 
-    // Main resources directory (application.properties, etc.)
     let resources_dir = build_result.build_dir.join("resources");
     if resources_dir.is_dir() {
         run_cp.push(resources_dir.to_string_lossy().to_string());
     }
 
-    // Kotlin runtime + test JARs from the toolchain
-    for jar_name in &[
-        "kotlin-stdlib.jar",
-        "kotlin-stdlib-jdk8.jar",
-        "kotlin-stdlib-jdk7.jar",
-        "kotlin-test.jar",
-        "kotlin-test-junit5.jar",
-        "kotlin-test-junit.jar",
-    ] {
+    for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS
+        .iter()
+        .chain(&["kotlin-test.jar", "kotlin-test-junit5.jar", "kotlin-test-junit.jar"])
+    {
         let jar = kotlin_lib.join(jar_name);
         if jar.is_file() {
             run_cp.push(jar.to_string_lossy().to_string());
@@ -256,8 +238,6 @@ pub fn test(
 
     let classpath_str = run_cp.join(if cfg!(windows) { ";" } else { ":" });
 
-    // Try JUnit Platform Console Standalone first, then simple main runner.
-    // Prefer an explicit JAR from dev-dependencies, otherwise use the auto-provisioned one.
     let junit_jar = cp
         .test_jars
         .iter()
@@ -294,7 +274,6 @@ pub fn test(
             message: format!("Failed to execute JUnit: {e}"),
         })?
     } else {
-        // Detect test main classes by scanning test source files for `fun main()`
         let test_main_classes = detect_test_main_classes(&test_unit.sources, project_dir);
 
         if test_main_classes.is_empty() {
@@ -358,7 +337,6 @@ pub fn test(
     }
 }
 
-/// Scan test source files for `fun main()` declarations and derive JVM class names.
 fn detect_test_main_classes(test_sources: &[PathBuf], project_dir: &Path) -> Vec<String> {
     let mut classes = Vec::new();
 
@@ -375,17 +353,9 @@ fn detect_test_main_classes(test_sources: &[PathBuf], project_dir: &Path) -> Vec
     classes
 }
 
-/// If `kotlin-test` is among the project's test dependencies (or a
-/// `junit-platform-console-standalone` JAR is already present), ensure the
-/// JUnit 5 console-standalone fat JAR is available in the local cache.
-///
-/// This JAR bundles the JUnit Jupiter API (needed at compile time so that
-/// `kotlin.test.Test` — a typealias to `org.junit.jupiter.api.Test` —
-/// resolves) **and** the console launcher (needed at runtime to discover
-/// and execute tests).
 fn ensure_junit_platform(
     project_dir: &Path,
-    lockfile: &Lockfile,
+    lockfile: &kargo_core::lockfile::Lockfile,
 ) -> miette::Result<Option<PathBuf>> {
     let needs_junit = lockfile.package.iter().any(|pkg| {
         pkg.name.starts_with("kotlin-test")
@@ -436,7 +406,6 @@ fn derive_test_class_name(file: &Path, content: &str, project_dir: &Path) -> Opt
         }
     }
 
-    // Fallback: derive from file path relative to test source root
     let test_roots = [
         project_dir.join("src/test/kotlin"),
         project_dir.join("src/commonTest/kotlin"),

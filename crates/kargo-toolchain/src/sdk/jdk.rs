@@ -448,10 +448,11 @@ fn flatten_jdk_dir(dir: &Path) -> miette::Result<()> {
         };
 
         if jdk_home != *dir {
-            let tmp = dir.with_file_name(format!(
-                ".kargo-jdk-flatten-{}",
-                dir.file_name().unwrap().to_string_lossy()
-            ));
+            let dir_name = dir
+                .file_name()
+                .unwrap_or(std::ffi::OsStr::new("jdk"))
+                .to_string_lossy();
+            let tmp = dir.with_file_name(format!(".kargo-jdk-flatten-{dir_name}"));
             fs::rename(dir, &tmp).map_err(KargoError::Io)?;
             fs::rename(
                 jdk_home

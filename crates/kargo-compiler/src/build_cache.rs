@@ -3,6 +3,9 @@
 //! Stores compiled output keyed by the build fingerprint hash.
 //! On a cache hit, compiled artifacts are restored from the cache
 //! instead of recompiling.
+//!
+//! Size is tracked incrementally in a `.kargo-cache-size` metadata
+//! file to avoid repeated full-tree walks during eviction.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +13,8 @@ use std::path::{Path, PathBuf};
 use kargo_util::errors::KargoError;
 
 use crate::fingerprint::Fingerprint;
+
+const SIZE_FILE: &str = ".kargo-cache-size";
 
 /// Local build cache backed by the filesystem.
 pub struct BuildCache {
@@ -35,7 +40,6 @@ impl BuildCache {
     pub fn get(&self, fp: &Fingerprint) -> Option<PathBuf> {
         let entry_dir = self.entry_dir(fp);
         if entry_dir.is_dir() {
-            // Touch the marker to update LRU order
             let marker = entry_dir.join(".kargo-cache-marker");
             let _ = fs::write(&marker, chrono_now());
             Some(entry_dir)
@@ -46,16 +50,25 @@ impl BuildCache {
 
     /// Store build output in the cache under the fingerprint key.
     ///
-    /// Copies the contents of `classes_dir` into the cache.
+    /// Copies the contents of `classes_dir` into the cache and updates
+    /// the tracked total size incrementally.
     pub fn put(&self, fp: &Fingerprint, classes_dir: &Path) -> miette::Result<()> {
         let entry_dir = self.entry_dir(fp);
+
+        // If replacing an existing entry, subtract its size first
         if entry_dir.exists() {
+            let old_size = dir_size(&entry_dir);
             let _ = fs::remove_dir_all(&entry_dir);
+            self.adjust_tracked_size(-(old_size as i64));
         }
+
         copy_dir_recursive(classes_dir, &entry_dir)?;
 
         let marker = entry_dir.join(".kargo-cache-marker");
         let _ = fs::write(&marker, chrono_now());
+
+        let new_size = dir_size(&entry_dir);
+        self.adjust_tracked_size(new_size as i64);
 
         self.evict_if_needed();
         Ok(())
@@ -68,14 +81,18 @@ impl BuildCache {
             None => return Ok(false),
         };
         copy_dir_recursive(&entry_dir, target_dir)?;
-        // Remove the cache marker from restored output
         let _ = fs::remove_file(target_dir.join(".kargo-cache-marker"));
         Ok(true)
     }
 
-    /// Total size of the cache in bytes.
+    /// Total size of the cache in bytes (read from tracked metadata,
+    /// with a full-walk fallback if the metadata is missing or corrupted).
     pub fn size(&self) -> u64 {
-        dir_size(&self.root)
+        self.read_tracked_size().unwrap_or_else(|| {
+            let actual = dir_size(&self.root);
+            self.write_tracked_size(actual);
+            actual
+        })
     }
 
     /// Number of cached entries.
@@ -97,16 +114,50 @@ impl BuildCache {
         Ok(size)
     }
 
+    /// Rebuild the tracked size by walking the full cache tree.
+    /// Use for recovery if the size file is suspected to be inaccurate.
+    pub fn rebuild_size(&self) -> u64 {
+        let actual = dir_size(&self.root);
+        self.write_tracked_size(actual);
+        actual
+    }
+
     fn entry_dir(&self, fp: &Fingerprint) -> PathBuf {
         self.root.join(&fp.hash)
     }
 
+    fn size_file_path(&self) -> PathBuf {
+        self.root.join(SIZE_FILE)
+    }
+
+    fn read_tracked_size(&self) -> Option<u64> {
+        let path = self.size_file_path();
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+    }
+
+    fn write_tracked_size(&self, size: u64) {
+        let _ = fs::create_dir_all(&self.root);
+        let _ = fs::write(self.size_file_path(), size.to_string());
+    }
+
+    fn adjust_tracked_size(&self, delta: i64) {
+        let current = self.read_tracked_size().unwrap_or(0);
+        let new_size = if delta >= 0 {
+            current.saturating_add(delta as u64)
+        } else {
+            current.saturating_sub((-delta) as u64)
+        };
+        self.write_tracked_size(new_size);
+    }
+
     fn evict_if_needed(&self) {
-        if self.size() <= self.max_bytes {
+        let mut current_size = self.size();
+        if current_size <= self.max_bytes {
             return;
         }
 
-        // Collect entries with their last-access time
         let Ok(entries) = fs::read_dir(&self.root) else {
             return;
         };
@@ -124,10 +175,9 @@ impl BuildCache {
             })
             .collect();
 
-        // Sort oldest first
+        // Sort oldest first (LRU eviction)
         dirs.sort_by_key(|(_, ts)| *ts);
 
-        let mut current_size = self.size();
         for (dir, _) in &dirs {
             if current_size <= self.max_bytes {
                 break;
@@ -136,6 +186,9 @@ impl BuildCache {
             let _ = fs::remove_dir_all(dir);
             current_size = current_size.saturating_sub(entry_size);
         }
+
+        // Sync the tracked size after eviction
+        self.write_tracked_size(current_size);
     }
 }
 
@@ -183,7 +236,11 @@ fn dir_size(path: &Path) -> u64 {
                 if m.is_dir() {
                     total += dir_size(&entry.path());
                 } else {
-                    total += m.len();
+                    // Don't count the size metadata file itself
+                    let name = entry.file_name();
+                    if name != SIZE_FILE {
+                        total += m.len();
+                    }
                 }
             }
         }
@@ -220,5 +277,50 @@ mod tests {
         let restore_dir = tmp.path().join("restored");
         assert!(cache.restore(&fp, &restore_dir).unwrap());
         assert!(restore_dir.join("Main.class").is_file());
+    }
+
+    #[test]
+    fn incremental_size_tracking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = BuildCache::new(tmp.path().join("cache"), None);
+
+        let src_dir = tmp.path().join("classes");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("Main.class"), b"bytecode").unwrap();
+
+        let fp = Fingerprint {
+            hash: "size_test".into(),
+        };
+        cache.put(&fp, &src_dir).unwrap();
+
+        let tracked = cache.read_tracked_size().unwrap();
+        assert!(tracked > 0);
+
+        let actual = dir_size(&cache.root);
+        assert_eq!(tracked, actual);
+    }
+
+    #[test]
+    fn rebuild_size_recovers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = BuildCache::new(tmp.path().join("cache"), None);
+
+        let src_dir = tmp.path().join("classes");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("A.class"), b"aaaa").unwrap();
+
+        let fp = Fingerprint {
+            hash: "rebuild".into(),
+        };
+        cache.put(&fp, &src_dir).unwrap();
+
+        // Corrupt the size file
+        cache.write_tracked_size(999999);
+        assert_eq!(cache.read_tracked_size(), Some(999999));
+
+        // Rebuild should fix it
+        let correct = cache.rebuild_size();
+        assert!(correct < 999999);
+        assert_eq!(cache.read_tracked_size(), Some(correct));
     }
 }

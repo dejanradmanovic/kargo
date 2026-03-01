@@ -17,5 +17,7 @@ thiserror.workspace = true
 miette.workspace = true
 tracing.workspace = true
 
+[dependencies.tempfile]
+workspace = true
+
 [dev-dependencies]
-tempfile.workspace = true

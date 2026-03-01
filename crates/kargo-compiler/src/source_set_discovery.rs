@@ -45,29 +45,99 @@ fn discover_single_target(src: &Path) -> DiscoveredSources {
 }
 
 fn discover_kmp(src: &Path, manifest: &Manifest) -> DiscoveredSources {
+    use crate::source_set_hierarchy::SourceSetHierarchy;
+
+    let hierarchy = SourceSetHierarchy::standard();
     let mut main_sources = Vec::new();
     let mut test_sources = Vec::new();
+    let mut added_main = std::collections::HashSet::new();
+    let mut added_test = std::collections::HashSet::new();
 
-    let common_main = SourceSet::new("commonMain", src.to_path_buf());
-    let common_test = SourceSet::new("commonTest", src.to_path_buf()).with_depends_on("commonMain");
+    // Always include commonMain/commonTest
+    main_sources.push(SourceSet::new("commonMain", src.to_path_buf()));
+    added_main.insert("common".to_string());
 
-    main_sources.push(common_main);
-    test_sources.push(common_test);
+    test_sources.push(
+        SourceSet::new("commonTest", src.to_path_buf()).with_depends_on("commonMain"),
+    );
+    added_test.insert("common".to_string());
 
+    // Collect all leaf target source set names
+    let leaf_names: Vec<&str> = manifest
+        .targets
+        .keys()
+        .filter_map(|k| KotlinTarget::parse(k).map(|t| t.source_set_name()))
+        .collect();
+
+    // Add intermediate source sets from the hierarchy
+    let intermediates = hierarchy.intermediates_for(&leaf_names);
+
+    for intermediate in &intermediates {
+        if *intermediate == "common" {
+            continue;
+        }
+        if added_main.insert(intermediate.to_string()) {
+            let parent_name = hierarchy
+                .ancestors_of(intermediate)
+                .first()
+                .copied()
+                .unwrap_or("common");
+            let depends_on = format!("{parent_name}Main");
+
+            let main_ss =
+                SourceSet::new(format!("{intermediate}Main"), src.to_path_buf())
+                    .with_depends_on(&depends_on);
+            main_sources.push(main_ss);
+        }
+        if added_test.insert(intermediate.to_string()) {
+            let parent_name = hierarchy
+                .ancestors_of(intermediate)
+                .first()
+                .copied()
+                .unwrap_or("common");
+
+            let test_ss =
+                SourceSet::new(format!("{intermediate}Test"), src.to_path_buf())
+                    .with_depends_on(format!("{parent_name}Test"))
+                    .with_depends_on(format!("{intermediate}Main"));
+            test_sources.push(test_ss);
+        }
+    }
+
+    // Add leaf target source sets
     for key in manifest.targets.keys() {
         let Some(target) = KotlinTarget::parse(key) else {
             continue;
         };
         let ss_name = target.source_set_name();
 
-        let target_main = SourceSet::new(format!("{ss_name}Main"), src.to_path_buf())
-            .with_depends_on("commonMain");
-        let target_test = SourceSet::new(format!("{ss_name}Test"), src.to_path_buf())
-            .with_depends_on("commonTest")
-            .with_depends_on(format!("{ss_name}Main"));
+        if added_main.insert(ss_name.to_string()) {
+            let parent_name = hierarchy
+                .ancestors_of(ss_name)
+                .first()
+                .copied()
+                .unwrap_or("common");
+            let depends_on = format!("{parent_name}Main");
 
-        main_sources.push(target_main);
-        test_sources.push(target_test);
+            let target_main =
+                SourceSet::new(format!("{ss_name}Main"), src.to_path_buf())
+                    .with_depends_on(&depends_on);
+            main_sources.push(target_main);
+        }
+
+        if added_test.insert(ss_name.to_string()) {
+            let parent_name = hierarchy
+                .ancestors_of(ss_name)
+                .first()
+                .copied()
+                .unwrap_or("common");
+
+            let target_test =
+                SourceSet::new(format!("{ss_name}Test"), src.to_path_buf())
+                    .with_depends_on(format!("{parent_name}Test"))
+                    .with_depends_on(format!("{ss_name}Main"));
+            test_sources.push(target_test);
+        }
     }
 
     DiscoveredSources {

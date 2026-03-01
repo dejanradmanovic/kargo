@@ -6,7 +6,6 @@ use kargo_maven::cache::LocalCache;
 use kargo_util::errors::KargoError;
 
 use super::{ProcessorInfo, ProcessorKind};
-use crate::classpath::to_classpath_string;
 
 const KAPT_PLUGIN_ID: &str = "org.jetbrains.kotlin.kapt3";
 
@@ -178,22 +177,7 @@ pub fn run_kapt_pass(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a classpath string that includes the Kotlin stdlib JARs.
-fn classpath_string_with_stdlib(jars: &[PathBuf], kotlin_home: &Path) -> String {
-    let kotlin_lib = kotlin_home.join("lib");
-    let mut all: Vec<PathBuf> = jars.to_vec();
-    for name in &[
-        "kotlin-stdlib.jar",
-        "annotations-13.0.jar",
-        "kotlin-annotations-jvm.jar",
-    ] {
-        let jar = kotlin_lib.join(name);
-        if jar.is_file() && !all.iter().any(|p| p.ends_with(name)) {
-            all.push(jar);
-        }
-    }
-    to_classpath_string(&all)
-}
+use crate::classpath::classpath_string_with_stdlib;
 
 /// Discover annotation processor classes from JAR service files.
 fn discover_processor_classes(jars: &[PathBuf]) -> Vec<String> {

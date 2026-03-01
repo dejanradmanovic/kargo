@@ -10,5 +10,5 @@ data class GitHubRepo(
     val description: String? = null,
     @SerialName("stargazers_count") val stars: Int = 0,
     val language: String? = null,
-    @SerialName("html_url") val url: String,
+    @SerialName("html_url") val url: String
 )

@@ -56,7 +56,13 @@ pub fn cmd_info(pkg_version: &str) -> Result<()> {
         }
     }
 
-    let config = GlobalConfig::load().unwrap_or_default();
+    let config = match GlobalConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to load global config, using defaults: {e}");
+            GlobalConfig::default()
+        }
+    };
     if let Some(jdk) = sdk::discover_jdk(config.toolchain.jdk.as_deref()) {
         println!(
             "  System JDK:     {} at {}",

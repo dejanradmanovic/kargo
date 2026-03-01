@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use kargo_core::lockfile::{Lockfile, ResolvedPackageInfo};
 use kargo_core::manifest::Manifest;
@@ -9,6 +10,10 @@ use kargo_maven::cache::LocalCache;
 use kargo_maven::download;
 use kargo_resolver::resolver::{self, ResolutionResult};
 use kargo_util::hash::sha256_bytes;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 
 /// Fetch all dependencies: resolve, download artifacts to the project cache,
 /// and update the lockfile.
@@ -42,13 +47,13 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
     let mut up_to_date = 0u32;
     let mut checksums: HashMap<String, String> = HashMap::new();
 
-    let dl_sp = spinner(&format!("Downloading {artifact_count} dependencies..."));
+    // Separate cached artifacts from those needing download
+    let mut to_download = Vec::new();
     for artifact in &result.artifacts {
         let coord_key = format!(
             "{}:{}:{}",
             artifact.group, artifact.artifact, artifact.version
         );
-
         if let Some(jar_path) =
             cache.get_jar(&artifact.group, &artifact.artifact, &artifact.version, None)
         {
@@ -56,45 +61,84 @@ pub async fn fetch(project_root: &Path, verbose: bool) -> miette::Result<()> {
             if let Ok(data) = std::fs::read(&jar_path) {
                 checksums.insert(coord_key, sha256_bytes(&data));
             }
-            continue;
+        } else {
+            to_download.push((artifact, coord_key));
+        }
+    }
+
+    let dl_sp = spinner(&format!("Downloading {artifact_count} dependencies..."));
+    if !to_download.is_empty() {
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
+        let mut join_set = JoinSet::new();
+
+        for (artifact, coord_key) in &to_download {
+            let sem = semaphore.clone();
+            let client = client.clone();
+            let repos = repos.clone();
+            let group = artifact.group.clone();
+            let artifact_name = artifact.artifact.clone();
+            let version = artifact.version.clone();
+            let coord_key = coord_key.clone();
+            let cache_root = cache.root().to_path_buf();
+
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await;
+                let local_cache = LocalCache::from_root(cache_root);
+                for repo in &repos {
+                    let url = repo.jar_url(&group, &artifact_name, &version, None);
+                    let label = format!("{artifact_name}:{version}");
+                    match download::download_artifact(&client, repo, &url, &label).await {
+                        Ok(Some(data)) => {
+                            if let Err(e) =
+                                kargo_maven::checksum::verify(&client, repo, &url, &data).await
+                            {
+                                return Err(e);
+                            }
+                            let checksum = sha256_bytes(&data);
+                            local_cache.put_jar(&group, &artifact_name, &version, None, &data)?;
+                            return Ok(Some((coord_key, checksum)));
+                        }
+                        Ok(None) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(None)
+            });
         }
 
-        dl_sp.set_message(format!(
-            "Downloading {}:{}...",
-            artifact.artifact, artifact.version
-        ));
-
-        let mut found = false;
-        for repo in &repos {
-            let url = repo.jar_url(&artifact.group, &artifact.artifact, &artifact.version, None);
-            let label = format!("{}:{}", artifact.artifact, artifact.version);
-            match download::download_artifact(&client, repo, &url, &label).await? {
-                Some(data) => {
-                    kargo_maven::checksum::verify(&client, repo, &url, &data).await?;
-                    checksums.insert(coord_key.clone(), sha256_bytes(&data));
-                    cache.put_jar(
-                        &artifact.group,
-                        &artifact.artifact,
-                        &artifact.version,
-                        None,
-                        &data,
-                    )?;
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(Some((coord_key, checksum)))) => {
+                    checksums.insert(coord_key, checksum);
                     downloaded += 1;
-                    found = true;
-                    break;
                 }
-                None => continue,
+                Ok(Ok(None)) => {
+                    // Not found in any repo (warning handled below)
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(kargo_util::errors::KargoError::Generic {
+                        message: format!("Download task failed: {e}"),
+                    }
+                    .into())
+                }
             }
         }
 
-        if !found && verbose {
-            kargo_util::progress::status_warn(
-                "Warning",
-                &format!(
-                    "JAR not found for {}:{}:{}",
-                    artifact.group, artifact.artifact, artifact.version
-                ),
-            );
+        // Report warnings for artifacts not found
+        if verbose {
+            let downloaded_keys: std::collections::HashSet<_> = checksums.keys().collect();
+            for (artifact, coord_key) in &to_download {
+                if !downloaded_keys.contains(coord_key) {
+                    kargo_util::progress::status_warn(
+                        "Warning",
+                        &format!(
+                            "JAR not found for {}:{}:{}",
+                            artifact.group, artifact.artifact, artifact.version
+                        ),
+                    );
+                }
+            }
         }
     }
     dl_sp.finish_and_clear();

@@ -28,8 +28,10 @@ pub enum IncrementalDecision {
 /// `fp_dir` is the fingerprint storage directory
 /// (typically `.kargo/fingerprints/<target>/<profile>/`).
 pub fn check(unit: &CompilationUnit, fp_dir: &Path, kotlin_version: &str) -> IncrementalDecision {
-    // If output directory doesn't exist, definitely rebuild
-    if !unit.output_dir.is_dir() {
+    // If output directory doesn't exist or is empty, definitely rebuild.
+    // The directory may have been re-created (e.g. by BuildContext) after
+    // a clean, so an empty dir must also trigger a rebuild.
+    if !unit.output_dir.is_dir() || dir_is_empty(&unit.output_dir) {
         let fp = fingerprint::compute(unit, kotlin_version);
         return IncrementalDecision::NeedsRebuild(fp);
     }
@@ -66,4 +68,10 @@ pub fn mark_complete(
     let mtime = fingerprint::max_mtime(unit);
     fingerprint::save_mtime(fp_dir, unit_name, mtime)?;
     Ok(())
+}
+
+fn dir_is_empty(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut rd| rd.next().is_none())
+        .unwrap_or(true)
 }

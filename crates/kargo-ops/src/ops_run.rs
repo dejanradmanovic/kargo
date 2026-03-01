@@ -6,8 +6,6 @@
 use std::path::Path;
 
 use kargo_compiler::classpath;
-use kargo_core::lockfile::Lockfile;
-use kargo_core::manifest::Manifest;
 use kargo_util::errors::KargoError;
 
 use crate::ops_build::{self, BuildOptions};
@@ -36,11 +34,11 @@ pub fn run(
         .into());
     }
 
-    let manifest = Manifest::from_path(&project_dir.join("Kargo.toml"))?;
-    let lockfile = Lockfile::from_path(&project_dir.join("Kargo.lock"))
-        .unwrap_or(Lockfile { package: vec![] });
+    // Reuse manifest, lockfile, and preflight from the build result
+    let manifest = &build_result.manifest;
+    let lockfile = &build_result.lockfile;
+    let preflight = &build_result.preflight;
 
-    // Detect main class
     let main_class = manifest
         .package
         .main_class
@@ -52,10 +50,7 @@ pub fn run(
                 .into(),
         })?;
 
-    let preflight = crate::ops_setup::preflight(project_dir)?;
-
-    // Build classpath: compiled classes + Kotlin runtime + dependency JARs
-    let cp = classpath::assemble(project_dir, &lockfile);
+    let cp = classpath::assemble(project_dir, lockfile);
     let mut cp_parts = vec![build_result.classes_dir.to_string_lossy().to_string()];
 
     let resources_dir = build_result.build_dir.join("resources");
@@ -63,13 +58,8 @@ pub fn run(
         cp_parts.push(resources_dir.to_string_lossy().to_string());
     }
 
-    // Kotlin stdlib from the toolchain (always needed at runtime)
     let kotlin_lib = preflight.toolchain.home.join("lib");
-    for jar_name in &[
-        "kotlin-stdlib.jar",
-        "kotlin-stdlib-jdk8.jar",
-        "kotlin-stdlib-jdk7.jar",
-    ] {
+    for jar_name in kargo_compiler::classpath::STDLIB_RUNTIME_JARS {
         let jar = kotlin_lib.join(jar_name);
         if jar.is_file() {
             cp_parts.push(jar.to_string_lossy().to_string());
@@ -103,7 +93,6 @@ pub fn run(
         message: format!("Failed to execute java: {e}"),
     })?;
 
-    // Print stdout/stderr from the running program
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stdout.is_empty() {
@@ -124,7 +113,6 @@ pub fn run(
     Ok(())
 }
 
-/// Scan source files for a `fun main()` declaration and derive the class name.
 fn detect_main_class(project_dir: &Path) -> Option<String> {
     let src_dirs = vec![
         project_dir.join("src/main/kotlin"),
@@ -145,12 +133,7 @@ fn detect_main_class(project_dir: &Path) -> Option<String> {
     None
 }
 
-/// Derive a JVM class name from a .kt file path.
-///
-/// Kotlin top-level `fun main()` in `com/example/Main.kt` becomes
-/// `com.example.MainKt` on the JVM.
-fn derive_main_class(file: &Path, project_dir: &Path) -> Option<String> {
-    // Try to extract package from file content
+fn derive_main_class(file: &std::path::Path, project_dir: &std::path::Path) -> Option<String> {
     if let Ok(content) = std::fs::read_to_string(file) {
         for line in content.lines() {
             let trimmed = line.trim();
@@ -165,7 +148,6 @@ fn derive_main_class(file: &Path, project_dir: &Path) -> Option<String> {
         }
     }
 
-    // Fallback: derive from file path relative to source root
     let src_roots = [
         project_dir.join("src/main/kotlin"),
         project_dir.join("src/commonMain/kotlin"),
