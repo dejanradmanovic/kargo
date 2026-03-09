@@ -60,7 +60,7 @@ semver = { version = "1", features = ["serde"] }
 petgraph = "0.6"
 
 # Terminal UI
-indicatif = "0.17"
+indicatif = "0.18"
 console = "0.15"
 dialoguer = "0.11"
 
